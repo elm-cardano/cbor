@@ -174,6 +174,7 @@ Cbor.Encode.map : List ( Encoder, Encoder ) -> Encoder
 Cbor.Decode.int : Decoder Int
 Cbor.Decode.string : Decoder String
 Cbor.Decode.array : Decoder a -> Decoder (List a)
+-- TODO: actually we need a little bit of thinking here.
 Cbor.Decode.field : CborItem -> Decoder a -> Decoder a
 ```
 
