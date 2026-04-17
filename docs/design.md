@@ -725,3 +725,137 @@ Use cases: round-tripping unknown CBOR, diagnostic notation (`Cbor.diagnose : Cb
 Direct combinators skip the intermediate `CborItem` representation — bytes flow straight into/from domain types in one pass. The `item` decoder/encoder exists for users who need the generic tree, paying the allocation cost explicitly.
 
 The `Encoder` closure approach (`Strategy -> Bytes.Encode.Encoder`) adds minimal overhead — one function call per node during encoding. No intermediate tree is allocated. Strategy propagates through nested structures via closure capture.
+
+## Cardano CDDL Decoding Patterns
+
+The Conway-era Cardano ledger spec (`conway.cddl`) defines ~90 CBOR types. Most are trivial to decode with the combinators above (primitives, fixed-position arrays via `record` builder, keyed maps via `keyedRecord` builder, simple tagged values, homogeneous maps). The challenging types fall into three categories.
+
+### Sum types with discriminant dispatch
+
+Every discriminated union in the Cardano CDDL is a CBOR array where the first element is a uint tag: `certificate` (17 variants), `gov_action` (7), `script` (4), `native_script` (6), `credential` (2), `drep` (4), `voter` (5), `relay` (3), `datum_option` (2).
+
+Approach: read the array header, read the discriminant int, dispatch via `andThen` + `case`. Remaining fields decoded with `succeed`/`keep`. No new combinators needed.
+
+```elm
+decodeCertificate : Decoder ctx err Certificate
+decodeCertificate =
+    arrayHeader
+        |> andThen (\_ ->
+            int |> andThen (\tag ->
+                case tag of
+                    0 ->
+                        succeed AccountRegistrationCert
+                            |> keep decodeStakeCredential
+                    2 ->
+                        succeed DelegationToStakePoolCert
+                            |> keep decodeStakeCredential
+                            |> keep decodePoolKeyhash
+                    ...
+                    _ ->
+                        fail (UnknownCertificateTag tag)
+            )
+        )
+```
+
+Note: `pool_params` is an inline group — its 9 fields are spliced into the `pool_registration_cert` array (tag 3), so that branch simply has more `keep` steps.
+
+### Recursive types
+
+`native_script`, `plutus_data`, and `metadatum` are recursive.
+
+**Recursion itself works naturally** when self-references appear inside `andThen` callbacks — the lambda captures the decoder reference without evaluating it at definition time:
+
+```elm
+decodeNativeScript =
+    arrayHeader |> andThen (\_ ->
+        int |> andThen (\tag ->
+            case tag of
+                1 -> array decodeNativeScript |> map ScriptAll  -- recursive, fine
+                2 -> array decodeNativeScript |> map ScriptAny
+                3 -> succeed ScriptNOfK |> keep int |> keep (array decodeNativeScript)
+                ...
+        )
+    )
+```
+
+No `lazy` combinator is needed for this pattern. A `lazy` would only be necessary if a self-reference appeared as a direct argument at the top level (e.g., `oneOf [ array decodePlutusData, ... ]` where `decodePlutusData` is eagerly evaluated before being defined). The dispatch patterns below avoid that.
+
+**`native_script`** dispatches on an int discriminant inside an array — same pattern as sum types, just happens to be recursive. Straightforward.
+
+**`plutus_data` and `metadatum`** are different: their variants are distinguished by CBOR major type, not a discriminant integer:
+
+```
+plutus_data =
+    constr<plutus_data>               -- major type 6 (tags 121-127, 102)
+    / {* plutus_data => plutus_data}  -- major type 5
+    / [* plutus_data]                 -- major type 4
+    / big_int                         -- major type 0, 1, or 6 (tags 2, 3)
+    / bounded_bytes                   -- major type 2
+```
+
+Three approaches were considered:
+
+**(A) `oneOf` — start here.** Each branch fails on the first byte if the major type doesn't match, so backtracking is cheap. Constr (tags 121–127, 102) must come before bigInt (tags 2, 3) since both are major type 6:
+
+```elm
+decodePlutusData =
+    oneOf
+        [ decodeConstr
+        , keyValue decodePlutusData decodePlutusData |> map PlutusMap
+        , array decodePlutusData |> map PlutusArray
+        , bigInt |> map PlutusBigInt
+        , bytes |> map PlutusBytes
+        ]
+```
+
+**(B) Initial-byte dispatch.** Read one byte, extract major type (top 3 bits), dispatch in O(1) without backtracking. Requires internal `fromByte` helpers (which already exist inside `Cbor.Decode.item`) to be either exposed or composed differently. More efficient but more API surface.
+
+**(C) `item` + convert.** Decode the entire tree via `Cbor.Decode.item` into `CborItem`, then walk it to produce the domain type. Simple, but two-pass.
+
+**Decision: start with (A).** `oneOf` is clean and correct. Benchmark before optimizing. If profiling shows `oneOf` backtracking is a bottleneck for deeply nested `plutus_data`, revisit other approaches.
+
+### Multiple valid encodings
+
+Several types accept multiple CBOR shapes for the same semantic value. In every case in this CDDL, the variants differ by major type, so `oneOf` fails fast on the first byte:
+
+| Type | Variants |
+|------|----------|
+| `set<a0>` / `nonempty_set` / `nonempty_oset` | tag 258 + array (mt 6) vs plain array (mt 4) |
+| `transaction_output` | array (mt 4) vs map (mt 5) |
+| `redeemers` | array (mt 4) vs map (mt 5) |
+| `auxiliary_data` | map (mt 5) vs array (mt 4) vs tag 259 (mt 6) |
+| `value` | uint (mt 0) vs array (mt 4) |
+| `big_int` | int (mt 0/1) vs tag (mt 6) |
+
+Approach: `oneOf` with each encoding as a branch. Since major types differ, the first byte is enough to reject a wrong branch — backtracking cost is one byte.
+
+```elm
+decodeSet : Decoder ctx err a -> Decoder ctx err (List a)
+decodeSet elementDecoder =
+    oneOf
+        [ tag (Unknown 258) (array elementDecoder)
+        , array elementDecoder
+        ]
+
+decodeValue : Decoder ctx err Value
+decodeValue =
+    oneOf
+        [ int |> map Coin
+        , record Tuple.pair
+            |> element int
+            |> element (decodeMultiasset positiveInt)
+            |> buildRecord
+            |> map (\( c, ma ) -> CoinAndAssets c ma)
+        ]
+```
+
+None of these types are recursive or high-frequency-per-node, so `oneOf` overhead is negligible.
+
+### Non-challenging patterns
+
+The remaining complex-looking types are handled by existing combinators without difficulty:
+
+- **Embedded CBOR** (`data`, `script_ref`): `tag Cbor (bytes |> andThen decodeEmbedded)` — decode tag 24, decode bytes, run a nested CBOR decoder on the bytes.
+- **Large optional maps** (`transaction_body`, `protocol_param_update`, `transaction_witness_set`): `keyedRecord` builder with many `required`/`optional` steps — tedious but mechanical. `protocol_param_update` (all optional fields) may be better suited for `foldEntries`.
+- **Inline groups** (`pool_params`): `succeed`/`keep` from `Bytes.Decoder` directly — the fields are positional within the enclosing array.
+- **Nested homogeneous maps** (`voting_procedures`): `keyValue` for the outer and inner maps.
