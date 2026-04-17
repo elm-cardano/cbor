@@ -1,4 +1,4 @@
-module CborTests exposing (..)
+module CborTests exposing (suite)
 
 import Bytes exposing (Bytes)
 import Bytes.Decoder as BD
