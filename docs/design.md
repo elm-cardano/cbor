@@ -161,15 +161,23 @@ Cbor.Decode        -- combinators for decoding CBOR bytes to domain types
 
 ### Dependencies
 
-- `elm/bytes` — `Bytes` type, `Bytes.Encode.Encoder` (used directly as the encoding type)
+- `elm/bytes` — `Bytes` type, `Bytes.Encode.Encoder` (used internally by the custom `Encoder` type)
 - `elm-cardano/bytes-decoder` — `Bytes.Decoder.Decoder` and `Bytes.Decoder.Error` (used directly as the decoding types)
 - `elm-cardano/float16` — float16 ↔ float64 conversion for `CborFloat FW16`
 
 ### Encoder and Decoder Types
 
-Encoding uses `Bytes.Encode.Encoder` from `elm/bytes` directly — no custom wrapper type.
-
 Decoding uses `Bytes.Decoder.Decoder context error value` from `elm-cardano/bytes-decoder` directly. Users call `Bytes.Decoder.decode` to run decoders. The `context` and `error` type parameters remain polymorphic in all `Cbor.Decode` combinators.
+
+Encoding uses a custom `Encoder` type that defers strategy decisions:
+
+```elm
+type Encoder = Encoder (Strategy -> Bytes.Encode.Encoder)
+
+encode : Strategy -> Encoder -> Bytes
+```
+
+This allows the same encoder definition to produce different byte representations depending on the strategy (key ordering, definite/indefinite length). See Encoding Configuration below.
 
 ### Error Handling
 
@@ -188,7 +196,7 @@ CBOR-specific errors (wrong major type, value out of range, malformed encoding) 
 ### Encoding Combinators
 
 ```elm
--- Primitives (deterministic: shortest encoding form)
+-- Primitives (always use shortest encoding form regardless of strategy)
 Cbor.Encode.int : Int -> Encoder
 Cbor.Encode.float : Float -> Encoder
 Cbor.Encode.bool : Bool -> Encoder
@@ -198,7 +206,15 @@ Cbor.Encode.string : String -> Encoder
 Cbor.Encode.bytes : Bytes -> Encoder
 Cbor.Encode.simple : Int -> Encoder
 
--- Collections
+-- Explicit width control (ignores strategy for width)
+Cbor.Encode.intWithWidth : IntWidth -> Int -> Encoder
+Cbor.Encode.floatWithWidth : FloatWidth -> Float -> Encoder
+
+-- Chunked strings/bytes (always indefinite-length encoding)
+Cbor.Encode.stringChunked : List String -> Encoder
+Cbor.Encode.bytesChunked : List Bytes -> Encoder
+
+-- Collections (strategy determines key ordering and definite/indefinite length)
 Cbor.Encode.array : List Encoder -> Encoder
 Cbor.Encode.map : List ( Encoder, Encoder ) -> Encoder
 Cbor.Encode.tag : Tag -> Encoder -> Encoder
@@ -206,30 +222,88 @@ Cbor.Encode.tag : Tag -> Encoder -> Encoder
 -- Convenience
 Cbor.Encode.list : (a -> Encoder) -> List a -> Encoder
 
--- Escape hatch (lossless: respects stored widths and entry order)
+-- Escape hatch (lossless: ignores strategy entirely, respects CborItem's stored widths/order/length)
 Cbor.Encode.item : CborItem -> Encoder
+
+-- Run encoding
+Cbor.Encode.encode : Strategy -> Encoder -> Bytes
 ```
+
+### Encoding Configuration
+
+```elm
+type alias Strategy =
+    { sortKeys : List ( Bytes, Bytes.Encode.Encoder ) -> List ( Bytes, Bytes.Encode.Encoder )
+    , lengthMode : Length  -- Definite or Indefinite for arrays and maps
+    }
+```
+
+Primitive combinators always use shortest encoding (all canonical forms agree on this). Collection combinators consult the strategy for key ordering and length mode. The strategy propagates through nested structures automatically via closure capture.
+
+**Key sorting approaches** (from RFC 7049, RFC 8949, and CTAP2):
+
+| Strategy | Sort rule | Specified in |
+|----------|-----------|-------------|
+| `deterministic` | Lexicographic on encoded key bytes | RFC 8949 §4.2.1 |
+| `canonical` | Shorter keys first, then lexicographic within same length | RFC 7049 / RFC 8949 §4.2.3 |
+| `ctap2` | Group by major type, then shorter first, then lexicographic | CTAP2 (FIDO) |
+| `unsorted` | Preserve insertion order | — |
+
+For typical map keys (integers and strings only), all three sorted strategies produce identical results. Differences only surface with mixed-type or complex keys.
+
+**Predefined strategies:**
+
+```elm
+Cbor.Encode.deterministic : Strategy    -- RFC 8949 §4.2.1, definite length
+Cbor.Encode.canonical : Strategy        -- RFC 7049 / §4.2.3, definite length
+Cbor.Encode.ctap2 : Strategy            -- CTAP2, definite length
+Cbor.Encode.unsorted : Strategy         -- insertion order, definite length
+```
+
+**Usage — same encoder, different strategies:**
+
+```elm
+personEncoder : Person -> Encoder
+personEncoder p =
+    Cbor.Encode.map
+        [ ( Cbor.Encode.int 0, Cbor.Encode.string p.name )
+        , ( Cbor.Encode.int 1, Cbor.Encode.int p.age )
+        ]
+
+-- Apply different strategies:
+Cbor.Encode.encode Cbor.Encode.deterministic (personEncoder alice)
+Cbor.Encode.encode Cbor.Encode.canonical (personEncoder alice)
+Cbor.Encode.encode myCustomStrategy (personEncoder alice)
+```
+
+**Map key sorting implementation**: `map` applies the strategy to each key encoder to get key `Bytes`, pairs each with its key+value `Bytes.Encode.Encoder`, passes the list to `strategy.sortKeys`, then sequences the result. Keys are encoded once — the encoded key bytes are reused in the output via `Bytes.Encode.bytes`.
+
+**Definite vs indefinite length**: The strategy's `lengthMode` applies to arrays and maps only. Strings and byte strings always use definite length via `string`/`bytes`. For indefinite-length (chunked) strings/bytes, use the explicit `stringChunked`/`bytesChunked` combinators.
+
+**`item` and explicit-width combinators** ignore the strategy entirely — their output is fixed regardless of strategy. This ensures lossless round-tripping and explicit-width encoding are not affected by the strategy.
 
 ### Decoding Combinators
 
 ```elm
 -- Primitives
-Cbor.Decode.int : Decoder ctx err Int           -- major types 0, 1; safe range only (±2^52)
-Cbor.Decode.float : Decoder ctx err Float       -- major type 7, additional info 25/26/27
-Cbor.Decode.bool : Decoder ctx err Bool         -- 0xf4 (false), 0xf5 (true)
-Cbor.Decode.null : a -> Decoder ctx err a       -- 0xf6; returns the provided value
-Cbor.Decode.string : Decoder ctx err String     -- major type 3
-Cbor.Decode.bytes : Decoder ctx err Bytes       -- major type 2
+Cbor.Decode.int : Decoder ctx err Int              -- major types 0, 1; fails if |value| > 2^52
+Cbor.Decode.bigInt : Decoder ctx err ( Sign, Bytes ) -- major types 0, 1; full 64-bit range
+Cbor.Decode.float : Decoder ctx err Float          -- major type 7, additional info 25/26/27
+Cbor.Decode.bool : Decoder ctx err Bool            -- 0xf4 (false), 0xf5 (true)
+Cbor.Decode.null : a -> Decoder ctx err a          -- 0xf6; returns the provided value
+Cbor.Decode.string : Decoder ctx err String        -- major type 3 (definite + indefinite)
+Cbor.Decode.bytes : Decoder ctx err Bytes          -- major type 2 (definite + indefinite)
 
 -- Collections
 Cbor.Decode.array : Decoder ctx err a -> Decoder ctx err (List a)
 Cbor.Decode.keyValue : Decoder ctx err k -> Decoder ctx err v -> Decoder ctx err (List ( k, v ))
 Cbor.Decode.field : k -> Decoder ctx err k -> Decoder ctx err v -> Decoder ctx err v
+Cbor.Decode.foldEntries : Decoder ctx err k -> (k -> acc -> Decoder ctx err acc) -> acc -> Decoder ctx err acc
 Cbor.Decode.tag : Tag -> Decoder ctx err a -> Decoder ctx err a
 
 -- Structure headers (for heterogeneous structures)
-Cbor.Decode.arrayHeader : Decoder ctx err Int
-Cbor.Decode.mapHeader : Decoder ctx err Int
+Cbor.Decode.arrayHeader : Decoder ctx err (Maybe Int)   -- Nothing for indefinite
+Cbor.Decode.mapHeader : Decoder ctx err (Maybe Int)     -- Nothing for indefinite
 
 -- Escape hatch
 Cbor.Decode.item : Decoder ctx err CborItem
@@ -239,22 +313,13 @@ Composition combinators (`succeed`, `fail`, `andThen`, `oneOf`, `map`, `map2`–
 
 ### Map Decoding
 
-CBOR map keys can be any type, but `CborItem` doesn't support structural equality (contains `Bytes`). The `field` combinator works with decoded key types:
+#### Ordered keys (sequential field matching)
 
 ```elm
 field : k -> Decoder ctx err k -> Decoder ctx err v -> Decoder ctx err v
 ```
 
-Semantics: decode the next key using the key decoder, compare the result to expected `k` via `==`, decode the value on match, fail on mismatch. Works for `Int`, `String`, and other types with Elm's structural equality.
-
-**Homogeneous maps** (all entries have same key/value types):
-
-```elm
-Cbor.Decode.keyValue Cbor.Decode.string Cbor.Decode.int
--- : Decoder ctx err (List ( String, Int ))
-```
-
-**Heterogeneous maps / records** (ordered keys, common in deterministic CBOR):
+Decodes the next key, compares to expected `k` via `==`, decodes value on match, fails on mismatch. Requires keys in expected order — appropriate for deterministic CBOR.
 
 ```elm
 decodeRecord =
@@ -266,68 +331,102 @@ decodeRecord =
         )
 ```
 
-`mapHeader` reads the major type 5 header and returns the entry count. Then `field` reads entries sequentially, verifying each key. This requires keys in expected order — appropriate for deterministic CBOR with sorted keys.
-
-For unordered maps, decode all entries with `keyValue`, then look up fields from the resulting list.
-
-### Encoding Configuration
-
-Since `Encoder` is `Bytes.Encode.Encoder`, encoding decisions are made at the call site — there is no deferred configuration.
-
-#### Approach A: Deterministic by default + explicit-width variants
-
-Standard combinators produce deterministic output:
-- `int` uses the shortest `IntWidth`
-- `float` uses the shortest `FloatWidth` that preserves the value
-- `map` sorts keys by encoded byte representation (RFC 8949 §4.2.1)
-
-Additional explicit-width variants for non-standard cases:
+#### Unordered keys (fold over entries)
 
 ```elm
-Cbor.Encode.intWithWidth : IntWidth -> Int -> Encoder
-Cbor.Encode.floatWithWidth : FloatWidth -> Float -> Encoder
-Cbor.Encode.mapUnsorted : List ( Encoder, Encoder ) -> Encoder
+foldEntries :
+    Decoder ctx err k
+    -> (k -> acc -> Decoder ctx err acc)
+    -> acc
+    -> Decoder ctx err acc
 ```
 
-`item : CborItem -> Encoder` produces lossless output — respects stored widths, entry order, and definite/indefinite length.
+Reads the map header, then loops through entries. For each entry: decode the key, call the handler with the key and current accumulator. The handler decodes the value and returns the updated accumulator. Handles both definite and indefinite-length maps.
 
-Pros: explicit control when needed, clean default.
-Cons: more API surface.
+```elm
+type alias Partial = { name : Maybe String, age : Maybe Int }
 
-#### Approach B: item as the only non-deterministic path
+decodePerson : Decoder ctx err Person
+decodePerson =
+    Cbor.Decode.foldEntries Cbor.Decode.int
+        (\key partial ->
+            case key of
+                0 ->
+                    Cbor.Decode.string
+                        |> Bytes.Decoder.map (\v -> { partial | name = Just v })
+                1 ->
+                    Cbor.Decode.int
+                        |> Bytes.Decoder.map (\v -> { partial | age = Just v })
+                _ ->
+                    Cbor.Decode.item
+                        |> Bytes.Decoder.map (\_ -> partial)
+        )
+        { name = Nothing, age = Nothing }
+        |> Bytes.Decoder.andThen (\p ->
+            case ( p.name, p.age ) of
+                ( Just n, Just a ) ->
+                    Bytes.Decoder.succeed (Person n a)
+                _ ->
+                    Bytes.Decoder.fail MissingFields
+        )
+```
 
-Standard combinators always produce deterministic output. For non-deterministic encoding, construct a `CborItem` and use `item`. No `*WithWidth` or `*Unsorted` variants.
+**Important**: the handler MUST decode exactly one value per call (advancing the byte offset past the entry's value). Failing to consume the value corrupts the offset for subsequent entries.
 
-Pros: minimal API surface.
-Cons: constructing `CborItem` manually is verbose for simple cases like "encode this int as 4 bytes."
+#### Skipping entries
 
-**Map key sorting**: `map` calls `Bytes.Encode.encode` on each key encoder to get the key bytes, sorts by length-first lexicographic order (RFC 8949 §4.2.1), then builds the final encoder. Keys are encoded twice (once for sorting, once in the output). Acceptable because map keys are typically small.
+No dedicated `skipEntry` combinator needed — compose from existing primitives:
+
+```elm
+-- Skip one CBOR value (advancing past it)
+skipValue = Cbor.Decode.item |> Bytes.Decoder.map (\_ -> ())
+
+-- Skip one key-value pair
+skipEntry = Bytes.Decoder.map2 (\_ _ -> ()) Cbor.Decode.item Cbor.Decode.item
+```
+
+`Cbor.Decode.item` parses any well-formed CBOR item (including nested structures), so these correctly advance past variable-length data. There is a performance cost — `item` fully constructs a `CborItem` tree that is immediately discarded. A dedicated skip-without-allocating optimization can be added later if profiling shows it matters.
+
+### Break Code Detection
+
+For indefinite-length containers, the break code `0xFF` appears where the next item would start. Without a peek primitive (which would require `randomAccess` and force slow path), break detection uses the initial-byte-first pattern:
+
+```elm
+-- Internal structure (not public API):
+-- Read one byte, check for break, then dispatch based on major type
+unsignedInt8 |> andThen (\byte ->
+    if byte == 0xFF then
+        succeed Done
+    else
+        decodeItemFromByte byte |> map (\item -> Loop ...)
+)
+```
+
+The CBOR decoder reads the initial byte first, then dispatches based on major type and additional info. This is the natural structure for CBOR's tag-length-value format. For definite-length containers, no break check is needed (loop exactly `count` times). For indefinite-length, the break check integrates naturally into the loop via `andThen` — which stays on the fast path as long as the callback doesn't return `fail`.
+
+A peek primitive would add complexity without benefit — the initial-byte-first pattern is both simpler and faster.
 
 ### CborItem as Escape Hatch
 
 Bridge functions between the combinator world and the generic tree:
 
 ```elm
-Cbor.Encode.item : CborItem -> Encoder          -- lossless encoding
+Cbor.Encode.item : CborItem -> Encoder          -- lossless (ignores Strategy)
 Cbor.Decode.item : Decoder ctx err CborItem      -- full CBOR parser
 ```
 
-Use cases: round-tripping unknown CBOR, diagnostic notation (`Cbor.diagnose : CborItem -> String`), inspecting/debugging arbitrary data.
+Use cases: round-tripping unknown CBOR, diagnostic notation (`Cbor.diagnose : CborItem -> String`), inspecting/debugging arbitrary data, skipping unknown values.
 
 ### Open Design Questions
 
-1. **`int` and large values**: `int` fails for values outside ±2^52. Should there be a dedicated combinator (e.g., `bigInt : Decoder ctx err ( Sign, Bytes )`) or is `item` sufficient as the fallback?
+1. **`bigInt` range**: Should `bigInt` decode all integers (returning 8-byte zero-padded `Bytes` for small values too) or only values outside the Int52 range? Universal is more convenient; restricted avoids surprising zero-padding.
 
-2. **Indefinite-length string/bytes**: Should `string` and `bytes` handle both definite and indefinite-length transparently (concatenating chunks), or expose the chunk structure?
+2. **Indefinite-length string/bytes decoding**: Should `string` and `bytes` concatenate indefinite-length chunks transparently, or should indefinite-length strings/bytes only be decoded via `item`? Transparent concatenation is simpler for consumers but hides chunk structure.
 
-3. **`arrayHeader`/`mapHeader` and indefinite length**: Returns `Int` (count), but indefinite-length containers have no count. Options: return `Maybe Int`, a union type, or fail on indefinite.
-
-4. **`field` and key skipping**: `field` reads one entry and fails if the key doesn't match. For maps with keys you want to skip, should there be an explicit skip combinator (`skipEntry : Decoder ctx err ()`) or should `field` scan forward automatically?
-
-5. **Encoding approach**: Approach A (explicit-width variants) vs Approach B (item-only non-deterministic). See Encoding Configuration above.
-
-6. **Break code detection in indefinite-length decoding**: Detecting the break code (0xFF) requires reading a byte, checking if it's a break, and either stopping or using it as the start of the next item. Since bytes-decoder has no peek/unread, the CBOR initial-byte parsing must be integrated into the loop body rather than delegated to sub-decoders. This affects internal decoder structure but not the public API.
+3. **Strategy extensibility**: Is `{ sortKeys, lengthMode }` sufficient? Potential extensions: per-subtree strategy overrides (`withStrategy : Strategy -> Encoder -> Encoder`), separate length modes for arrays vs maps.
 
 ### Performance Rationale
 
 Direct combinators skip the intermediate `CborItem` representation — bytes flow straight into/from domain types in one pass. The `item` decoder/encoder exists for users who need the generic tree, paying the allocation cost explicitly.
+
+The `Encoder` closure approach (`Strategy -> Bytes.Encode.Encoder`) adds minimal overhead — one function call per node during encoding. No intermediate tree is allocated. Strategy propagates through nested structures via closure capture.
