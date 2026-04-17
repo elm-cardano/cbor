@@ -53,6 +53,24 @@ suite =
         , strategyTests
         , itemDecoderTests
         , diagnosticTests
+        , intBoundaryTests
+        , bigIntTests
+        , floatCornerCaseTests
+        , indefiniteLengthTests
+        , chunkedTests
+        , tagCombinatorTests
+        , foldEntriesTests
+        , fieldTests
+        , keyedRecordStashTests
+        , recordEdgeCaseTests
+        , sortingDivergenceTests
+        , itemEncoderTests
+        , sequenceTests
+        , rawUnsafeTests
+        , simpleValueTests
+        , diagnosticGapTests
+        , nullDecodeTests
+        , errorCaseTests
         ]
 
 
@@ -895,4 +913,854 @@ diagnosticTests =
             \_ ->
                 diagnose (CborSimple SW8 255)
                     |> Expect.equal "simple(255)"
+        ]
+
+
+
+-- ADDITIONAL TYPE ALIASES
+
+
+type alias PersonFull =
+    { name : String, age : Int, email : String, active : Bool }
+
+
+type alias DetailedPerson =
+    { name : String, age : Int, email : String, phone : String }
+
+
+type alias Config =
+    { host : String, port_ : Int, debug : Bool, verbose : Bool }
+
+
+
+-- ADDITIONAL HELPERS
+
+
+encodeToHexIndefinite : CE.Encoder -> String
+encodeToHexIndefinite encoder =
+    Hex.fromBytes (CE.encode { sortKeys = identity, lengthMode = Indefinite } encoder)
+
+
+itemRoundTrip : String -> Test
+itemRoundTrip hex =
+    test ("item round-trip: " ++ hex) <|
+        \_ ->
+            case decodeFromHex CD.item hex of
+                Ok cborItem ->
+                    Hex.fromBytes (CE.encode CE.deterministic (CE.item cborItem))
+                        |> Expect.equal hex
+
+                Err err ->
+                    Expect.fail ("decode failed: " ++ Debug.toString err)
+
+
+
+-- §1 INTEGER WIDTH BOUNDARIES
+
+
+intBoundaryTests : Test
+intBoundaryTests =
+    describe "Integer width boundaries"
+        [ test "encode 4294967295 (max IW32)" <|
+            \_ -> encodeToHex (CE.int 4294967295) |> Expect.equal "1affffffff"
+        , test "decode 4294967295" <|
+            \_ -> decodeFromHex CD.int "1affffffff" |> Expect.equal (Ok 4294967295)
+        , test "encode 4294967296 (min IW64)" <|
+            \_ -> encodeToHex (CE.int 4294967296) |> Expect.equal "1b0000000100000000"
+        , test "decode 4294967296" <|
+            \_ -> decodeFromHex CD.int "1b0000000100000000" |> Expect.equal (Ok 4294967296)
+        , test "encode -24 (max negative IW0)" <|
+            \_ -> encodeToHex (CE.int -24) |> Expect.equal "37"
+        , test "decode -24" <|
+            \_ -> decodeFromHex CD.int "37" |> Expect.equal (Ok -24)
+        , test "encode -25 (requires IW8)" <|
+            \_ -> encodeToHex (CE.int -25) |> Expect.equal "3818"
+        , test "decode -25" <|
+            \_ -> decodeFromHex CD.int "3818" |> Expect.equal (Ok -25)
+        , test "encode -256 (max negative IW8)" <|
+            \_ -> encodeToHex (CE.int -256) |> Expect.equal "38ff"
+        , test "decode -256" <|
+            \_ -> decodeFromHex CD.int "38ff" |> Expect.equal (Ok -256)
+        , test "encode -257 (requires IW16)" <|
+            \_ -> encodeToHex (CE.int -257) |> Expect.equal "390100"
+        , test "decode -257" <|
+            \_ -> decodeFromHex CD.int "390100" |> Expect.equal (Ok -257)
+        , test "int decoder rejects value > 2^52" <|
+            \_ ->
+                decodeFromHex CD.int "1b0010000000000001"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "intWithWidth IW16 pads to 2 bytes" <|
+            \_ -> encodeToHex (CE.intWithWidth IW16 1) |> Expect.equal "190001"
+        , test "intWithWidth IW32 pads to 4 bytes" <|
+            \_ -> encodeToHex (CE.intWithWidth IW32 1) |> Expect.equal "1a00000001"
+        , test "intWithWidth IW64 pads to 8 bytes" <|
+            \_ -> encodeToHex (CE.intWithWidth IW64 1) |> Expect.equal "1b0000000000000001"
+        ]
+
+
+
+-- §3 BIGINT DECODER
+
+
+bigIntTests : Test
+bigIntTests =
+    describe "Cbor.Decode.bigInt"
+        [ test "positive small value" <|
+            \_ ->
+                decodeFromHex CD.bigInt "0a"
+                    |> Result.map (\( sign, bs ) -> ( sign, Hex.fromBytes bs ))
+                    |> Expect.equal (Ok ( Positive, "0a" ))
+        , test "negative small value" <|
+            \_ ->
+                decodeFromHex CD.bigInt "29"
+                    |> Result.map (\( sign, bs ) -> ( sign, Hex.fromBytes bs ))
+                    |> Expect.equal (Ok ( Negative, "09" ))
+        , test "tag 2 PositiveBigNum" <|
+            \_ ->
+                decodeFromHex CD.bigInt "c24401020304"
+                    |> Result.map (\( sign, bs ) -> ( sign, Hex.fromBytes bs ))
+                    |> Expect.equal (Ok ( Positive, "01020304" ))
+        , test "tag 3 NegativeBigNum" <|
+            \_ ->
+                decodeFromHex CD.bigInt "c34401020304"
+                    |> Result.map (\( sign, bs ) -> ( sign, Hex.fromBytes bs ))
+                    |> Expect.equal (Ok ( Negative, "01020304" ))
+        , test "rejects text string" <|
+            \_ ->
+                decodeFromHex CD.bigInt "60"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "rejects wrong tag" <|
+            \_ ->
+                decodeFromHex CD.bigInt "c101"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        ]
+
+
+
+-- §4 FLOAT CORNER CASES
+
+
+floatCornerCaseTests : Test
+floatCornerCaseTests =
+    describe "Float corner cases"
+        [ test "-Infinity decode" <|
+            \_ ->
+                decodeFromHex CD.float "f9fc00"
+                    |> Result.map (\f -> isInfinite f && f < 0)
+                    |> Expect.equal (Ok True)
+        , test "+Infinity encodes as float16" <|
+            \_ -> encodeToHex (CE.float (1 / 0)) |> Expect.equal "f97c00"
+        , test "-Infinity encodes as float16" <|
+            \_ -> encodeToHex (CE.float (-1 / 0)) |> Expect.equal "f9fc00"
+        , test "NaN encodes as float16" <|
+            \_ -> encodeToHex (CE.float (0 / 0)) |> Expect.equal "f97e00"
+        , test "float decoder rejects bool" <|
+            \_ ->
+                decodeFromHex CD.float "f4"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "Infinity round-trip" <|
+            \_ ->
+                CE.encode CE.deterministic (CE.float (1 / 0))
+                    |> BD.decode CD.float
+                    |> Result.map isInfinite
+                    |> Expect.equal (Ok True)
+        , test "NaN round-trip" <|
+            \_ ->
+                CE.encode CE.deterministic (CE.float (0 / 0))
+                    |> BD.decode CD.float
+                    |> Result.map isNaN
+                    |> Expect.equal (Ok True)
+        ]
+
+
+
+-- §5 INDEFINITE-LENGTH CONTAINERS
+
+
+indefiniteLengthTests : Test
+indefiniteLengthTests =
+    describe "Indefinite-length containers"
+        [ test "encode indefinite array" <|
+            \_ ->
+                encodeToHexIndefinite (CE.array [ CE.int 1, CE.int 2, CE.int 3 ])
+                    |> Expect.equal "9f010203ff"
+        , test "encode empty indefinite array" <|
+            \_ ->
+                encodeToHexIndefinite (CE.array [])
+                    |> Expect.equal "9fff"
+        , test "encode indefinite map" <|
+            \_ ->
+                encodeToHexIndefinite
+                    (CE.map [ ( CE.int 1, CE.int 2 ), ( CE.int 3, CE.int 4 ) ])
+                    |> Expect.equal "bf01020304ff"
+        , test "encode empty indefinite map" <|
+            \_ ->
+                encodeToHexIndefinite (CE.map [])
+                    |> Expect.equal "bfff"
+        , test "decode indefinite array via combinator" <|
+            \_ ->
+                decodeFromHex (CD.array CD.int) "9f010203ff"
+                    |> Expect.equal (Ok [ 1, 2, 3 ])
+        , test "decode empty indefinite array" <|
+            \_ ->
+                decodeFromHex (CD.array CD.int) "9fff"
+                    |> Expect.equal (Ok [])
+        , test "decode indefinite map via combinator" <|
+            \_ ->
+                decodeFromHex (CD.keyValue CD.int CD.int) "bf01020304ff"
+                    |> Expect.equal (Ok [ ( 1, 2 ), ( 3, 4 ) ])
+        , test "decode empty indefinite map" <|
+            \_ ->
+                decodeFromHex (CD.keyValue CD.int CD.int) "bfff"
+                    |> Expect.equal (Ok [])
+        , test "indefinite array via item decoder" <|
+            \_ ->
+                case decodeFromHex CD.item "9f010203ff" of
+                    Ok (CborArray Indefinite items) ->
+                        Expect.equal 3 (List.length items)
+
+                    other ->
+                        Expect.fail ("Expected CborArray Indefinite, got " ++ Debug.toString other)
+        , test "indefinite map via item decoder" <|
+            \_ ->
+                case decodeFromHex CD.item "bf01020304ff" of
+                    Ok (CborMap Indefinite entries) ->
+                        Expect.equal 2 (List.length entries)
+
+                    other ->
+                        Expect.fail ("Expected CborMap Indefinite, got " ++ Debug.toString other)
+        , test "indefinite map with sorted keys" <|
+            \_ ->
+                let
+                    strategy =
+                        { sortKeys = CE.deterministic.sortKeys
+                        , lengthMode = Indefinite
+                        }
+                in
+                Hex.fromBytes
+                    (CE.encode strategy
+                        (CE.map
+                            [ ( CE.int 10, CE.int 20 )
+                            , ( CE.int 1, CE.int 2 )
+                            ]
+                        )
+                    )
+                    |> Expect.equal "bf01020a14ff"
+        ]
+
+
+
+-- §6 CHUNKED STRINGS AND BYTES
+
+
+chunkedTests : Test
+chunkedTests =
+    describe "Chunked strings and bytes"
+        [ test "encode chunked string" <|
+            \_ ->
+                encodeToHex (CE.stringChunked [ "hel", "lo" ])
+                    |> Expect.equal "7f6368656c626c6fff"
+        , test "encode chunked bytes" <|
+            \_ ->
+                encodeToHex
+                    (CE.bytesChunked
+                        [ Hex.toBytesUnchecked "0102"
+                        , Hex.toBytesUnchecked "0304"
+                        ]
+                    )
+                    |> Expect.equal "5f420102420304ff"
+        , test "encode empty chunked string" <|
+            \_ ->
+                encodeToHex (CE.stringChunked [])
+                    |> Expect.equal "7fff"
+        , test "decode chunked string transparently" <|
+            \_ ->
+                decodeFromHex CD.string "7f6368656c626c6fff"
+                    |> Expect.equal (Ok "hello")
+        , test "decode chunked bytes transparently" <|
+            \_ ->
+                decodeFromHex CD.bytes "5f420102420304ff"
+                    |> Result.map Hex.fromBytes
+                    |> Expect.equal (Ok "01020304")
+        , test "chunked text via item decoder" <|
+            \_ ->
+                case decodeFromHex CD.item "7f6368656c626c6fff" of
+                    Ok (CborStringChunked chunks) ->
+                        Expect.equal [ "hel", "lo" ] chunks
+
+                    other ->
+                        Expect.fail ("Expected CborStringChunked, got " ++ Debug.toString other)
+        , test "chunked bytes via item decoder" <|
+            \_ ->
+                case decodeFromHex CD.item "5f420102420304ff" of
+                    Ok (CborByteStringChunked chunks) ->
+                        Expect.equal 2 (List.length chunks)
+
+                    other ->
+                        Expect.fail ("Expected CborByteStringChunked, got " ++ Debug.toString other)
+        ]
+
+
+
+-- §7 TAG COMBINATOR
+
+
+tagCombinatorTests : Test
+tagCombinatorTests =
+    describe "Cbor.Decode.tag"
+        [ test "matching tag succeeds" <|
+            \_ ->
+                decodeFromHex (CD.tag EpochDateTime CD.int) "c11a514b67b0"
+                    |> Expect.equal (Ok 1363896240)
+        , test "wrong tag fails" <|
+            \_ ->
+                decodeFromHex (CD.tag EpochDateTime CD.int) "c001"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "Unknown tag number" <|
+            \_ ->
+                decodeFromHex (CD.tag (Unknown 256) CD.int) "d9010001"
+                    |> Expect.equal (Ok 1)
+        , test "wrong major type fails" <|
+            \_ ->
+                decodeFromHex (CD.tag EpochDateTime CD.int) "01"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        ]
+
+
+
+-- §10 FOLD ENTRIES
+
+
+foldEntriesTests : Test
+foldEntriesTests =
+    describe "Cbor.Decode.foldEntries"
+        [ test "definite map sums values" <|
+            \_ ->
+                let
+                    handler _ acc =
+                        CD.int |> BD.map (\v -> acc + v)
+                in
+                decodeFromHex (CD.foldEntries CD.int handler 0) "a201020304"
+                    |> Expect.equal (Ok 6)
+        , test "empty map" <|
+            \_ ->
+                decodeFromHex
+                    (CD.foldEntries CD.int (\_ acc -> CD.int |> BD.map (\v -> acc + v)) 0)
+                    "a0"
+                    |> Expect.equal (Ok 0)
+        , test "indefinite map" <|
+            \_ ->
+                let
+                    handler _ acc =
+                        CD.int |> BD.map (\v -> acc + v)
+                in
+                decodeFromHex (CD.foldEntries CD.int handler 0) "bf01020304ff"
+                    |> Expect.equal (Ok 6)
+        , test "dispatch on keys with unknown skip" <|
+            \_ ->
+                let
+                    encoded =
+                        CE.encode CE.deterministic
+                            (CE.map
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 99, CE.string "extra" )
+                                ]
+                            )
+
+                    handler key acc =
+                        case key of
+                            0 ->
+                                CD.string |> BD.map (\name -> { acc | name = name })
+
+                            1 ->
+                                CD.int |> BD.map (\age -> { acc | age = age })
+
+                            _ ->
+                                CD.item |> BD.map (\_ -> acc)
+                in
+                BD.decode (CD.foldEntries CD.int handler { name = "", age = 0 }) encoded
+                    |> Expect.equal (Ok { name = "Alice", age = 30 })
+        ]
+
+
+
+-- §11 FIELD COMBINATOR
+
+
+fieldTests : Test
+fieldTests =
+    describe "Cbor.Decode.field"
+        [ test "key match decodes value" <|
+            \_ ->
+                decodeFromHex (CD.field 1 CD.int CD.string) "0163666f6f"
+                    |> Expect.equal (Ok "foo")
+        , test "key mismatch fails" <|
+            \_ ->
+                decodeFromHex (CD.field 1 CD.int CD.string) "0263666f6f"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        ]
+
+
+
+-- §8 KEYED RECORD STASHED KEY
+
+
+keyedRecordStashTests : Test
+keyedRecordStashTests =
+    describe "Keyed record stashed key"
+        [ test "stashed key scenario" <|
+            \_ ->
+                let
+                    encoded =
+                        CE.encode CE.deterministic
+                            (CE.map
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 3, CE.bool True )
+                                ]
+                            )
+
+                    decoder =
+                        CD.keyedRecord CD.int PersonFull
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.optional 2 CD.string ""
+                            |> CD.required 3 CD.bool
+                            |> CD.buildKeyedRecord
+                in
+                BD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Alice", age = 30, email = "", active = True })
+        , test "multiple consecutive absent optionals" <|
+            \_ ->
+                let
+                    encoded =
+                        CE.encode CE.deterministic
+                            (CE.map
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                ]
+                            )
+
+                    decoder =
+                        CD.keyedRecord CD.int DetailedPerson
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.optional 2 CD.string ""
+                            |> CD.optional 3 CD.string ""
+                            |> CD.buildKeyedRecord
+                in
+                BD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Alice", age = 30, email = "", phone = "" })
+        , test "extra trailing entries skipped" <|
+            \_ ->
+                let
+                    encoded =
+                        CE.encode CE.deterministic
+                            (CE.map
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 99, CE.string "extra" )
+                                ]
+                            )
+
+                    decoder =
+                        CD.keyedRecord CD.int Person
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.buildKeyedRecord
+                in
+                BD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Alice", age = 30 })
+        , test "required key mismatch fails" <|
+            \_ ->
+                let
+                    encoded =
+                        CE.encode CE.deterministic
+                            (CE.map
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 5, CE.int 30 )
+                                ]
+                            )
+
+                    decoder =
+                        CD.keyedRecord CD.int Person
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.buildKeyedRecord
+                in
+                BD.decode decoder encoded
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "optional as last step with unmatched key fails" <|
+            \_ ->
+                let
+                    encoded =
+                        CE.encode CE.deterministic
+                            (CE.map
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 3, CE.bool True )
+                                ]
+                            )
+
+                    decoder =
+                        CD.keyedRecord CD.int PersonOptional
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.optional 2 CD.string ""
+                            |> CD.buildKeyedRecord
+                in
+                BD.decode decoder encoded
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        ]
+
+
+
+-- §9 RECORD BUILDER EDGE CASES
+
+
+recordEdgeCaseTests : Test
+recordEdgeCaseTests =
+    describe "Record builder edge cases"
+        [ test "extra array elements skipped" <|
+            \_ ->
+                let
+                    encoded =
+                        CE.encode CE.deterministic
+                            (CE.array [ CE.float 1.0, CE.float 2.0, CE.float 3.0, CE.float 4.0 ])
+
+                    decoder =
+                        CD.record Point
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.buildRecord
+                in
+                BD.decode decoder encoded
+                    |> Expect.equal (Ok { x = 1.0, y = 2.0 })
+        , test "too few elements fails" <|
+            \_ ->
+                let
+                    encoded =
+                        CE.encode CE.deterministic
+                            (CE.array [ CE.float 1.0 ])
+
+                    decoder =
+                        CD.record Point
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.buildRecord
+                in
+                BD.decode decoder encoded
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "multiple optionals all absent" <|
+            \_ ->
+                let
+                    encoded =
+                        CE.encode CE.deterministic
+                            (CE.array [ CE.string "localhost", CE.int 8080 ])
+
+                    decoder =
+                        CD.record Config
+                            |> CD.element CD.string
+                            |> CD.element CD.int
+                            |> CD.optionalElement CD.bool False
+                            |> CD.optionalElement CD.bool False
+                            |> CD.buildRecord
+                in
+                BD.decode decoder encoded
+                    |> Expect.equal (Ok { host = "localhost", port_ = 8080, debug = False, verbose = False })
+        , test "multiple optionals one present" <|
+            \_ ->
+                let
+                    encoded =
+                        CE.encode CE.deterministic
+                            (CE.array [ CE.string "localhost", CE.int 8080, CE.bool True ])
+
+                    decoder =
+                        CD.record Config
+                            |> CD.element CD.string
+                            |> CD.element CD.int
+                            |> CD.optionalElement CD.bool False
+                            |> CD.optionalElement CD.bool False
+                            |> CD.buildRecord
+                in
+                BD.decode decoder encoded
+                    |> Expect.equal (Ok { host = "localhost", port_ = 8080, debug = True, verbose = False })
+        ]
+
+
+
+-- §12 CANONICAL VS DETERMINISTIC SORTING
+
+
+sortingDivergenceTests : Test
+sortingDivergenceTests =
+    describe "Canonical vs deterministic sorting"
+        [ test "deterministic: int 256 before string empty (lexicographic)" <|
+            \_ ->
+                -- Key A: string "" → 0x60 (1 byte)
+                -- Key B: int 256 → 0x190100 (3 bytes)
+                -- Deterministic: 0x19 < 0x60 → int 256 first
+                let
+                    entries =
+                        [ ( CE.string "", CE.int 1 )
+                        , ( CE.int 256, CE.int 2 )
+                        ]
+                in
+                Hex.fromBytes (CE.encode CE.deterministic (CE.map entries))
+                    |> Expect.equal "a2190100026001"
+        , test "canonical: string empty before int 256 (length-first)" <|
+            \_ ->
+                -- Canonical: 1 byte < 3 bytes → string "" first
+                let
+                    entries =
+                        [ ( CE.string "", CE.int 1 )
+                        , ( CE.int 256, CE.int 2 )
+                        ]
+                in
+                Hex.fromBytes (CE.encode CE.canonical (CE.map entries))
+                    |> Expect.equal "a2600119010002"
+        ]
+
+
+
+-- §13 ITEM ENCODER ROUND-TRIPS
+
+
+itemEncoderTests : Test
+itemEncoderTests =
+    describe "CE.item round-trips"
+        [ itemRoundTrip "00"
+        , itemRoundTrip "17"
+        , itemRoundTrip "1864"
+        , itemRoundTrip "1b000000e8d4a51000"
+        , itemRoundTrip "20"
+        , itemRoundTrip "3903e7"
+        , itemRoundTrip "f93e00"
+        , itemRoundTrip "f4"
+        , itemRoundTrip "f5"
+        , itemRoundTrip "f6"
+        , itemRoundTrip "f7"
+        , itemRoundTrip "6449455446"
+        , itemRoundTrip "4401020304"
+        , itemRoundTrip "83010203"
+        , itemRoundTrip "a201020304"
+        , itemRoundTrip "c11a514b67b0"
+        , test "encode CborInt64 positive" <|
+            \_ ->
+                Hex.fromBytes
+                    (CE.encode CE.deterministic
+                        (CE.item (CborInt64 Positive (Hex.toBytesUnchecked "000000000000002a")))
+                    )
+                    |> Expect.equal "1b000000000000002a"
+        , test "encode CborInt64 negative" <|
+            \_ ->
+                Hex.fromBytes
+                    (CE.encode CE.deterministic
+                        (CE.item (CborInt64 Negative (Hex.toBytesUnchecked "000000000000002a")))
+                    )
+                    |> Expect.equal "3b000000000000002a"
+        ]
+
+
+
+-- §14 SEQUENCE
+
+
+sequenceTests : Test
+sequenceTests =
+    describe "CE.sequence"
+        [ test "concatenates items without wrapping array" <|
+            \_ ->
+                encodeToHex (CE.sequence [ CE.int 1, CE.string "a" ])
+                    |> Expect.equal "016161"
+        ]
+
+
+
+-- §15 RAW UNSAFE
+
+
+rawUnsafeTests : Test
+rawUnsafeTests =
+    describe "CE.rawUnsafe"
+        [ test "pre-encoded bytes pass through unchanged" <|
+            \_ ->
+                encodeToHex (CE.rawUnsafe (Hex.toBytesUnchecked "f97c00"))
+                    |> Expect.equal "f97c00"
+        , test "rawUnsafe ignores strategy" <|
+            \_ ->
+                Hex.fromBytes
+                    (CE.encode CE.canonical
+                        (CE.rawUnsafe (Hex.toBytesUnchecked "83010203"))
+                    )
+                    |> Expect.equal "83010203"
+        ]
+
+
+
+-- §16 SIMPLE VALUES
+
+
+simpleValueTests : Test
+simpleValueTests =
+    describe "Simple values"
+        [ test "simple 0 encodes as SW0" <|
+            \_ -> encodeToHex (CE.simple 0) |> Expect.equal "e0"
+        , test "simple 19 encodes as SW0" <|
+            \_ -> encodeToHex (CE.simple 19) |> Expect.equal "f3"
+        , test "simple 32 encodes as SW8" <|
+            \_ -> encodeToHex (CE.simple 32) |> Expect.equal "f820"
+        , test "simple 255 encodes as SW8" <|
+            \_ -> encodeToHex (CE.simple 255) |> Expect.equal "f8ff"
+        , test "decode simple 0 via item" <|
+            \_ ->
+                case decodeFromHex CD.item "e0" of
+                    Ok (CborSimple SW0 0) ->
+                        Expect.pass
+
+                    other ->
+                        Expect.fail ("Expected CborSimple SW0 0, got " ++ Debug.toString other)
+        , test "decode simple 32 via item" <|
+            \_ ->
+                case decodeFromHex CD.item "f820" of
+                    Ok (CborSimple SW8 32) ->
+                        Expect.pass
+
+                    other ->
+                        Expect.fail ("Expected CborSimple SW8 32, got " ++ Debug.toString other)
+        ]
+
+
+
+-- §17 DIAGNOSTIC NOTATION GAPS
+
+
+diagnosticGapTests : Test
+diagnosticGapTests =
+    describe "Diagnostic notation gaps"
+        [ test "IW16 suffix" <|
+            \_ -> diagnose (CborInt52 IW16 1000) |> Expect.equal "1000_1"
+        , test "IW32 suffix" <|
+            \_ -> diagnose (CborInt52 IW32 1000000) |> Expect.equal "1000000_2"
+        , test "IW64 suffix" <|
+            \_ -> diagnose (CborInt52 IW64 1000000000000) |> Expect.equal "1000000000000_3"
+        , test "CborInt64 positive" <|
+            \_ ->
+                diagnose (CborInt64 Positive (Hex.toBytesUnchecked "000000000000002a"))
+                    |> Expect.equal "42_3"
+        , test "CborInt64 negative" <|
+            \_ ->
+                diagnose (CborInt64 Negative (Hex.toBytesUnchecked "000000000000002a"))
+                    |> Expect.equal "-43_3"
+        , test "CborByteString" <|
+            \_ ->
+                diagnose (CborByteString (Hex.toBytesUnchecked "01020304"))
+                    |> Expect.equal "h'01020304'"
+        , test "CborByteStringChunked" <|
+            \_ ->
+                diagnose
+                    (CborByteStringChunked
+                        [ Hex.toBytesUnchecked "0102"
+                        , Hex.toBytesUnchecked "0304"
+                        ]
+                    )
+                    |> Expect.equal "(_ h'0102', h'0304')"
+        , test "CborStringChunked" <|
+            \_ ->
+                diagnose (CborStringChunked [ "hel", "lo" ])
+                    |> Expect.equal "(_ \"hel\", \"lo\")"
+        , test "CborMap Indefinite" <|
+            \_ ->
+                diagnose
+                    (CborMap Indefinite
+                        [ { key = CborInt52 IW0 1, value = CborInt52 IW0 2 } ]
+                    )
+                    |> Expect.equal "{_ 1: 2}"
+        , test "CborFloat FW32" <|
+            \_ -> diagnose (CborFloat FW32 1.5) |> Expect.equal "1.5_2"
+        , test "CborFloat FW64" <|
+            \_ -> diagnose (CborFloat FW64 1.5) |> Expect.equal "1.5_3"
+        , test "NaN" <|
+            \_ -> diagnose (CborFloat FW16 (0 / 0)) |> Expect.equal "NaN_1"
+        , test "Infinity" <|
+            \_ -> diagnose (CborFloat FW16 (1 / 0)) |> Expect.equal "Infinity_1"
+        , test "-Infinity" <|
+            \_ -> diagnose (CborFloat FW16 (-1 / 0)) |> Expect.equal "-Infinity_1"
+        , test "integer-valued float" <|
+            \_ -> diagnose (CborFloat FW32 1.0) |> Expect.equal "1.0_2"
+        ]
+
+
+
+-- §18 NULL / UNDEFINED DECODE
+
+
+nullDecodeTests : Test
+nullDecodeTests =
+    describe "Null/undefined decode"
+        [ test "null decode with custom default" <|
+            \_ ->
+                decodeFromHex (CD.null "default") "f6"
+                    |> Expect.equal (Ok "default")
+        , test "null rejects non-null byte" <|
+            \_ ->
+                decodeFromHex (CD.null ()) "f5"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        ]
+
+
+
+-- §19 ERROR CASES
+
+
+errorCaseTests : Test
+errorCaseTests =
+    describe "Wrong major type errors"
+        [ test "string rejects int" <|
+            \_ ->
+                decodeFromHex CD.string "01"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "bytes rejects string" <|
+            \_ ->
+                decodeFromHex CD.bytes "60"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "array rejects map" <|
+            \_ ->
+                decodeFromHex (CD.array CD.int) "a0"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "map rejects array" <|
+            \_ ->
+                decodeFromHex (CD.keyValue CD.int CD.int) "80"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "bool rejects null" <|
+            \_ ->
+                decodeFromHex CD.bool "f6"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "tag rejects non-tag" <|
+            \_ ->
+                decodeFromHex (CD.tag EpochDateTime CD.int) "01"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "float rejects non-float major 7" <|
+            \_ ->
+                decodeFromHex CD.float "f4"
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
         ]
