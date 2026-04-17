@@ -221,7 +221,7 @@ Cbor.Encode.tag : Tag -> Encoder -> Encoder
 
 -- Record encoding (strategy determines key ordering and definite/indefinite length)
 -- Nothing entries are omitted from the output (optional field absent)
-Cbor.Encode.record : (k -> Encoder) -> List ( k, Maybe Encoder ) -> Encoder
+Cbor.Encode.keyedRecord : (k -> Encoder) -> List ( k, Maybe Encoder ) -> Encoder
 
 -- Convenience
 Cbor.Encode.list : (a -> Encoder) -> List a -> Encoder
@@ -269,7 +269,7 @@ Cbor.Encode.unsorted : Strategy         -- insertion order, definite length
 ```elm
 personEncoder : Person -> Encoder
 personEncoder p =
-    Cbor.Encode.record Cbor.Encode.int
+    Cbor.Encode.keyedRecord Cbor.Encode.int
         [ ( 0, Just (Cbor.Encode.string p.name) )
         , ( 1, Just (Cbor.Encode.int p.age) )
         ]
@@ -305,16 +305,17 @@ Cbor.Decode.field : k -> Decoder ctx err k -> Decoder ctx err v -> Decoder ctx e
 Cbor.Decode.foldEntries : Decoder ctx err k -> (k -> acc -> Decoder ctx err acc) -> acc -> Decoder ctx err acc
 Cbor.Decode.tag : Tag -> Decoder ctx err a -> Decoder ctx err a
 
--- Record builder (ordered maps with count validation)
-Cbor.Decode.record : Decoder ctx err k -> a -> RecordBuilder ctx err k a
-Cbor.Decode.required : k -> Decoder ctx err v -> RecordBuilder ctx err k (v -> a) -> RecordBuilder ctx err k a
-Cbor.Decode.optional : k -> Decoder ctx err v -> v -> RecordBuilder ctx err k (v -> a) -> RecordBuilder ctx err k a
-Cbor.Decode.buildRecord : RecordBuilder ctx err k a -> Decoder ctx err a
+-- Record builder (CBOR arrays → Elm values, positional)
+Cbor.Decode.record : a -> RecordBuilder ctx err a
+Cbor.Decode.element : Decoder ctx err v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
+Cbor.Decode.optionalElement : Decoder ctx err v -> v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
+Cbor.Decode.buildRecord : RecordBuilder ctx err a -> Decoder ctx err a
 
--- Tuple builder (ordered arrays with count validation)
-Cbor.Decode.tuple : a -> TupleBuilder ctx err a
-Cbor.Decode.element : Decoder ctx err v -> TupleBuilder ctx err (v -> a) -> TupleBuilder ctx err a
-Cbor.Decode.buildTuple : TupleBuilder ctx err a -> Decoder ctx err a
+-- Keyed record builder (CBOR maps → Elm values, key-based)
+Cbor.Decode.keyedRecord : Decoder ctx err k -> a -> KeyedRecordBuilder ctx err k a
+Cbor.Decode.required : k -> Decoder ctx err v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
+Cbor.Decode.optional : k -> Decoder ctx err v -> v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
+Cbor.Decode.buildKeyedRecord : KeyedRecordBuilder ctx err k a -> Decoder ctx err a
 
 -- Structure headers (for manual heterogeneous structures)
 Cbor.Decode.arrayHeader : Decoder ctx err (Maybe Int)   -- Nothing for indefinite
@@ -326,25 +327,25 @@ Cbor.Decode.item : Decoder ctx err CborItem
 
 Composition combinators (`succeed`, `fail`, `andThen`, `oneOf`, `map`, `map2`–`map5`, `keep`, `ignore`, `loop`, `repeat`, `inContext`) come from `Bytes.Decoder` directly — no re-exports.
 
-### Record Encoding
+### Keyed Record Encoding
 
 ```elm
-record : (k -> Encoder) -> List ( k, Maybe Encoder ) -> Encoder
+keyedRecord : (k -> Encoder) -> List ( k, Maybe Encoder ) -> Encoder
 ```
 
-Encodes a record as a CBOR map with a shared key encoder. `Nothing` entries are omitted from the output — this distinguishes "field absent" from "field is null".
+Encodes a keyed record as a CBOR map with a shared key encoder. `Nothing` entries are omitted from the output — this distinguishes "field absent" from "field is null".
 
 ```elm
 personEncoder : Person -> Encoder
 personEncoder p =
-    Cbor.Encode.record Cbor.Encode.int
+    Cbor.Encode.keyedRecord Cbor.Encode.int
         [ ( 0, Just (Cbor.Encode.string p.name) )
         , ( 1, Just (Cbor.Encode.int p.age) )
         , ( 2, Maybe.map Cbor.Encode.string p.email )  -- omitted when Nothing
         ]
 ```
 
-Internally, `record` filters out `Nothing` entries, applies the key encoder, and delegates to `map`. Strategy (key sorting, length mode) still applies.
+Internally, `keyedRecord` filters out `Nothing` entries, applies the key encoder, and delegates to `map`. Strategy (key sorting, length mode) still applies.
 
 ### Sequence Encoding
 
@@ -374,28 +375,216 @@ rawUnsafe : Bytes -> Encoder
 
 Injects pre-encoded CBOR bytes directly without validation. Ignores strategy (like `item`). If the bytes are not valid CBOR, the output is malformed — hence "Unsafe". Use case: caching pre-encoded fragments, embedding CBOR from external sources.
 
-### Map Decoding
+### Structured Decoding Builders
 
-#### Record builder (ordered keys with count validation)
+#### Record builder (CBOR arrays → Elm values)
 
 ```elm
-record : Decoder ctx err k -> a -> RecordBuilder ctx err k a
-required : k -> Decoder ctx err v -> RecordBuilder ctx err k (v -> a) -> RecordBuilder ctx err k a
-optional : k -> Decoder ctx err v -> v -> RecordBuilder ctx err k (v -> a) -> RecordBuilder ctx err k a
-buildRecord : RecordBuilder ctx err k a -> Decoder ctx err a
+type RecordBuilder ctx err a  -- opaque
+
+record : a -> RecordBuilder ctx err a
+element : Decoder ctx err v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
+optionalElement : Decoder ctx err v -> v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
+buildRecord : RecordBuilder ctx err a -> Decoder ctx err a
 ```
 
-The builder tracks field counts automatically. `buildRecord` reads the map header, validates the count (`requiredCount <= headerCount <= requiredCount + optionalCount`), runs the decoder pipeline, and verifies all entries were consumed.
+Decodes a CBOR array into an Elm value. Each `element`/`optionalElement` step decodes one array item positionally.
+
+**`element`**: decodes one value. Fails if no items remain (definite) or break code encountered (indefinite).
+
+**`optionalElement`**: if items remain, decodes one value. Otherwise, uses the default. Optional elements must be at the end of the decoded array, and if present, all preceeding optional elements must also be present. Otherwise decoding will fail.
+
+Internally, the builder threads a `remaining` counter through the pipeline via `andThen`. The result is a `( Int, a )` tuple carrying the updated remaining count and the partially applied constructor:
+
+```elm
+-- Internal (not public API):
+type RecordBuilder ctx err a
+    = RecordBuilder (Int -> Decoder ctx err ( Int, a ))
+    -- remaining -> decoder producing (updated remaining, value)
+
+record : a -> RecordBuilder ctx err a
+record constructor =
+    RecordBuilder (\remaining -> succeed ( remaining, constructor ))
+
+element : Decoder ctx err v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
+element valueDecoder (RecordBuilder innerDecoder) =
+    RecordBuilder (\remaining ->
+        innerDecoder remaining
+            |> andThen (\( rem, f ) ->
+                if rem > 0 then
+                    valueDecoder |> map (\v -> ( rem - 1, f v ))
+                else
+                    fail ...
+            )
+    )
+
+optionalElement : Decoder ctx err v -> v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
+optionalElement valueDecoder default (RecordBuilder innerDecoder) =
+    RecordBuilder (\remaining ->
+        innerDecoder remaining
+            |> andThen (\( rem, f ) ->
+                if rem > 0 then
+                    valueDecoder |> map (\v -> ( rem - 1, f v ))
+                else
+                    succeed ( 0, f default )
+            )
+    )
+
+buildRecord : RecordBuilder ctx err a -> Decoder ctx err a
+buildRecord (RecordBuilder decoder) =
+    arrayHeader
+        |> andThen (\maybeN ->
+            case maybeN of
+                Just n ->
+                    decoder n
+                        |> andThen (\( rem, value ) ->
+                            if rem == 0 then
+                                succeed value
+                            else
+                                fail ...
+                        )
+
+                Nothing ->
+                    ... -- indefinite: use break detection (see below)
+        )
+```
+
+Each `element` wraps the inner decoder in `andThen`, decodes one value, decrements `remaining`, and applies the value to the partially applied constructor. For definite-length arrays, `remaining` starts at the header count and must reach 0.
+
+```elm
+decodePoint : Decoder ctx err Point
+decodePoint =
+    Cbor.Decode.record Point
+        |> Cbor.Decode.element Cbor.Decode.float
+        |> Cbor.Decode.element Cbor.Decode.float
+        |> Cbor.Decode.optionalElement Cbor.Decode.float 0.0
+        |> Cbor.Decode.buildRecord
+```
+
+#### Keyed record builder (CBOR maps → Elm values)
+
+```elm
+type KeyedRecordBuilder ctx err k a  -- opaque
+
+keyedRecord : Decoder ctx err k -> a -> KeyedRecordBuilder ctx err k a
+required : k -> Decoder ctx err v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
+optional : k -> Decoder ctx err v -> v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
+buildKeyedRecord : KeyedRecordBuilder ctx err k a -> Decoder ctx err a
+```
+
+Decodes a CBOR map into an Elm value. Each `required`/`optional` step decodes one map entry by key.
+
+Internally, the builder threads a `State` through the pipeline via `andThen`, similar to the record builder but with `pendingKey` for handling absent optional fields:
+
+```elm
+-- Internal (not public API):
+type KeyedRecordBuilder ctx err k a
+    = KeyedRecordBuilder (Decoder ctx err k) (Int -> Decoder ctx err (State k a))
+    -- (key decoder, remaining -> decoder producing State)
+
+type alias State k a =
+    { remaining : Int       -- entries left to consume from stream
+    , pendingKey : Maybe k  -- key read but not yet matched
+    , value : a             -- partially applied constructor
+    }
+
+keyedRecord : Decoder ctx err k -> a -> KeyedRecordBuilder ctx err k a
+keyedRecord keyDecoder constructor =
+    KeyedRecordBuilder keyDecoder
+        (\remaining ->
+            succeed { remaining = remaining, pendingKey = Nothing, value = constructor }
+        )
+
+required : k -> Decoder ctx err v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
+required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
+    KeyedRecordBuilder keyDecoder
+        (\remaining ->
+            innerDecoder remaining
+                |> andThen (\state ->
+                    (case state.pendingKey of
+                        Just k  -> succeed k
+                        Nothing -> keyDecoder
+                    )
+                    |> andThen (\key ->
+                        if key == expectedKey then
+                            valueDecoder
+                                |> map (\v ->
+                                    { remaining = state.remaining - 1
+                                    , pendingKey = Nothing
+                                    , value = state.value v
+                                    }
+                                )
+                        else
+                            fail ...
+                    )
+                )
+        )
+
+optional : k -> Decoder ctx err v -> v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
+optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDecoder) =
+    KeyedRecordBuilder keyDecoder
+        (\remaining ->
+            innerDecoder remaining
+                |> andThen (\state ->
+                    if state.remaining == 0 && state.pendingKey == Nothing then
+                        succeed { state | value = state.value default }
+                    else
+                        (case state.pendingKey of
+                            Just k  -> succeed k
+                            Nothing -> keyDecoder
+                        )
+                        |> andThen (\key ->
+                            if key == expectedKey then
+                                valueDecoder
+                                    |> map (\v ->
+                                        { remaining = state.remaining - 1
+                                        , pendingKey = Nothing
+                                        , value = state.value v
+                                        }
+                                    )
+                            else
+                                succeed
+                                    { remaining = state.remaining
+                                    , pendingKey = Just key
+                                    , value = state.value default
+                                    }
+                        )
+                )
+        )
+
+buildKeyedRecord : KeyedRecordBuilder ctx err k a -> Decoder ctx err a
+buildKeyedRecord (KeyedRecordBuilder _ decoder) =
+    mapHeader
+        |> andThen (\maybeN ->
+            case maybeN of
+                Just n ->
+                    decoder n
+                        |> andThen (\state ->
+                            if state.remaining == 0 && state.pendingKey == Nothing then
+                                succeed state.value
+                            else
+                                fail ...
+                        )
+
+                Nothing ->
+                    ... -- indefinite: use break detection (see below)
+        )
+```
+
+- `remaining` tracks entries left to consume. Only decrements when a value is decoded from the stream.
+- `pendingKey` stores a key read from the stream that didn't match an `optional` field. The next step uses it instead of reading a new key.
+
+**Constraint**: the order of `required`/`optional` steps must match the key order in the CBOR data. When a key doesn't match an `optional` field, it's stashed for the next step — this only works if subsequent keys are "ahead" in the stream. For unordered keys, use `foldEntries`.
 
 **All required fields:**
 
 ```elm
 decodePerson : Decoder ctx err Person
 decodePerson =
-    Cbor.Decode.record Cbor.Decode.int Person
+    Cbor.Decode.keyedRecord Cbor.Decode.int Person
         |> Cbor.Decode.required 0 Cbor.Decode.string
         |> Cbor.Decode.required 1 Cbor.Decode.int
-        |> Cbor.Decode.buildRecord
+        |> Cbor.Decode.buildKeyedRecord
 ```
 
 **With optional fields:**
@@ -403,32 +592,13 @@ decodePerson =
 ```elm
 decodePerson : Decoder ctx err Person
 decodePerson =
-    Cbor.Decode.record Cbor.Decode.int Person
+    Cbor.Decode.keyedRecord Cbor.Decode.int Person
         |> Cbor.Decode.required 0 Cbor.Decode.string
         |> Cbor.Decode.required 1 Cbor.Decode.int
         |> Cbor.Decode.optional 2 Cbor.Decode.string ""
         |> Cbor.Decode.required 3 Cbor.Decode.bool
-        |> Cbor.Decode.buildRecord
+        |> Cbor.Decode.buildKeyedRecord
 ```
-
-**Internal state threading**: The builder uses `andThen` internally (not `keep`) to thread a state through the pipeline:
-
-```elm
-type alias State k a =
-    { remaining : Int       -- values left to consume from stream
-    , pendingKey : Maybe k  -- key read but not yet matched
-    , value : a             -- partially applied constructor
-    }
-```
-
-- `remaining` tracks values left to decode. Only decrements when a value is consumed.
-- `pendingKey` stores a key read from the stream that didn't match an `optional` field. The next step uses it instead of reading a new key.
-
-**`required`**: reads key (from `pendingKey` or stream), must match expected key via `==`, decodes value, decrements `remaining`.
-
-**`optional`**: if `remaining == 0` and no `pendingKey`, uses default. Otherwise reads key — if it matches, decodes value and decrements `remaining`. If it doesn't match, stashes the key in `pendingKey` and uses the default. `remaining` stays unchanged because the entry's value was not consumed.
-
-**`buildRecord`**: validates `requiredCount <= headerCount <= requiredCount + optionalCount`, runs the decoder, then checks `remaining == 0 && pendingKey == Nothing`.
 
 **Trace — optional field absent** (`{ 0: "Alice", 1: 30, 3: true }`, 3 entries):
 
@@ -440,33 +610,11 @@ type alias State k a =
 | optional 2 | `[v3]` | 1 | Just 3 | `Person "Alice" 30 ""` |
 | required 3 | `[]` | 0 | Nothing | `Person "Alice" 30 "" True` |
 
-`optional 2` reads key 3, no match, stashes it. `required 3` uses the stashed key, only reads the value.
+`optional 2` reads key 3, no match, stashes it. `required 3` uses the stashed key, only reads the value. Total consumed entries (3) equals header count (3).
 
-**Constraint**: keys must be in ascending order. The stashed key is always "ahead" of subsequent expected keys. For unordered keys, use `foldEntries`.
+#### Indefinite-length support
 
-**Definite-length only**: the builder requires a definite map header. For indefinite-length maps, use `foldEntries`.
-
-#### Tuple builder (ordered arrays with count validation)
-
-```elm
-tuple : a -> TupleBuilder ctx err a
-element : Decoder ctx err v -> TupleBuilder ctx err (v -> a) -> TupleBuilder ctx err a
-buildTuple : TupleBuilder ctx err a -> Decoder ctx err a
-```
-
-Same pattern as the record builder but for arrays. `buildTuple` reads the array header and validates count.
-
-```elm
-decodePoint : Decoder ctx err Point
-decodePoint =
-    Cbor.Decode.tuple Point
-        |> Cbor.Decode.element Cbor.Decode.float
-        |> Cbor.Decode.element Cbor.Decode.float
-        |> Cbor.Decode.element Cbor.Decode.float
-        |> Cbor.Decode.buildTuple
-```
-
-Internally, `TupleBuilder` counts `element` steps and validates against the array header. No `pendingKey` needed — elements are positional. Definite-length only.
+Both builders support indefinite-length containers. For indefinite-length arrays and maps, the builder reads the initial byte before each element/key step. If the byte is 0xFF (break code), decoding stops: remaining `optional`/`optionalElement` steps use their defaults, remaining `required`/`element` steps fail. Otherwise, the initial byte begins key/element decoding. This reuses the same initial-byte-first pattern described in Break Code Detection — the CBOR decoder reads the initial byte and dispatches based on major type, staying on the fast path.
 
 #### Low-level field combinator
 
@@ -474,7 +622,7 @@ Internally, `TupleBuilder` counts `element` steps and validates against the arra
 field : k -> Decoder ctx err k -> Decoder ctx err v -> Decoder ctx err v
 ```
 
-Decodes the next key, compares to expected `k` via `==`, decodes value on match, fails on mismatch. This is the primitive used internally by `required`. It can also be used directly with `mapHeader` + `keep`/`ignore` for manual record decoding without the builder.
+Decodes the next key, compares to expected `k` via `==`, decodes value on match, fails on mismatch. This is the primitive used internally by `required`. It can also be used directly with `mapHeader` + `keep`/`ignore` for manual decoding without the builder.
 
 #### Unordered keys (fold over entries)
 
@@ -518,7 +666,7 @@ decodePerson =
 
 **Important**: the handler MUST decode exactly one value per call (advancing the byte offset past the entry's value). Failing to consume the value corrupts the offset for subsequent entries.
 
-Use `foldEntries` when: keys are unordered, indefinite-length maps, or complex dispatch logic that doesn't fit the builder pattern.
+Use `foldEntries` when: keys are unordered, or complex dispatch logic that doesn't fit the builder pattern.
 
 #### Skipping entries
 
