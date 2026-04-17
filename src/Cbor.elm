@@ -20,9 +20,9 @@ CBOR encoding per [RFC 8949](https://datatracker.ietf.org/doc/html/rfc8949).
 
 -}
 
-import Bitwise
 import Bytes exposing (Bytes)
 import Bytes.Decode
+import Hex
 
 
 {-| A lossless representation of a CBOR data item.
@@ -171,10 +171,10 @@ diagnose item =
                     "-" ++ addOneToString arg ++ "_3"
 
         CborByteString bs ->
-            "h'" ++ bytesToHex bs ++ "'"
+            "h'" ++ Hex.fromBytes bs ++ "'"
 
         CborByteStringChunked chunks ->
-            "(_ " ++ String.join ", " (List.map (\b -> "h'" ++ bytesToHex b ++ "'") chunks) ++ ")"
+            "(_ " ++ String.join ", " (List.map (\b -> "h'" ++ Hex.fromBytes b ++ "'") chunks) ++ ")"
 
         CborString s ->
             "\"" ++ escapeString s ++ "\""
@@ -379,60 +379,6 @@ escapeChar c =
 
         _ ->
             String.fromChar c
-
-
-bytesToHex : Bytes -> String
-bytesToHex bs =
-    let
-        len =
-            Bytes.width bs
-
-        decoder =
-            Bytes.Decode.loop ( len, [] ) hexStep
-    in
-    case Bytes.Decode.decode decoder bs of
-        Just hexChars ->
-            String.join "" hexChars
-
-        Nothing ->
-            ""
-
-
-hexStep : ( Int, List String ) -> Bytes.Decode.Decoder (Bytes.Decode.Step ( Int, List String ) (List String))
-hexStep ( remaining, acc ) =
-    if remaining <= 0 then
-        Bytes.Decode.succeed (Bytes.Decode.Done (List.reverse acc))
-
-    else
-        Bytes.Decode.unsignedInt8
-            |> Bytes.Decode.map
-                (\byte ->
-                    Bytes.Decode.Loop
-                        ( remaining - 1
-                        , byteToHex byte :: acc
-                        )
-                )
-
-
-byteToHex : Int -> String
-byteToHex byte =
-    let
-        hi =
-            Bitwise.shiftRightZfBy 4 byte
-
-        lo =
-            Bitwise.and 0x0F byte
-    in
-    String.fromChar (nibbleToChar hi) ++ String.fromChar (nibbleToChar lo)
-
-
-nibbleToChar : Int -> Char
-nibbleToChar n =
-    if n < 10 then
-        Char.fromCode (n + 0x30)
-
-    else
-        Char.fromCode (n - 10 + 0x61)
 
 
 bytesToDiagInt : Bytes -> String

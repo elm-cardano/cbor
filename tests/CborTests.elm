@@ -1,198 +1,27 @@
 module CborTests exposing (..)
 
-import Bitwise
 import Bytes exposing (Bytes)
-import Bytes.Decode
 import Bytes.Decoder as BD
-import Bytes.Encode as BE
 import Cbor exposing (..)
 import Cbor.Decode as CD
 import Cbor.Encode as CE
 import Expect
+import Hex
 import Test exposing (..)
-
-
-{-| Convert a hex string to Bytes.
--}
-hexToBytes : String -> Bytes
-hexToBytes hex =
-    let
-        pairs =
-            hexPairs hex []
-    in
-    BE.encode (BE.sequence (List.map BE.unsignedInt8 pairs))
-
-
-hexPairs : String -> List Int -> List Int
-hexPairs hex acc =
-    if String.length hex < 2 then
-        List.reverse acc
-
-    else
-        let
-            pair =
-                String.left 2 hex
-
-            rest =
-                String.dropLeft 2 hex
-
-            value =
-                hexPairToInt pair
-        in
-        hexPairs rest (value :: acc)
-
-
-hexPairToInt : String -> Int
-hexPairToInt s =
-    let
-        hi =
-            hexCharToInt (String.left 1 s)
-
-        lo =
-            hexCharToInt (String.right 1 s)
-    in
-    hi * 16 + lo
-
-
-hexCharToInt : String -> Int
-hexCharToInt c =
-    case c of
-        "0" ->
-            0
-
-        "1" ->
-            1
-
-        "2" ->
-            2
-
-        "3" ->
-            3
-
-        "4" ->
-            4
-
-        "5" ->
-            5
-
-        "6" ->
-            6
-
-        "7" ->
-            7
-
-        "8" ->
-            8
-
-        "9" ->
-            9
-
-        "a" ->
-            10
-
-        "A" ->
-            10
-
-        "b" ->
-            11
-
-        "B" ->
-            11
-
-        "c" ->
-            12
-
-        "C" ->
-            12
-
-        "d" ->
-            13
-
-        "D" ->
-            13
-
-        "e" ->
-            14
-
-        "E" ->
-            14
-
-        "f" ->
-            15
-
-        "F" ->
-            15
-
-        _ ->
-            0
-
-
-{-| Convert Bytes to a hex string (lowercase).
--}
-bytesToHex : Bytes -> String
-bytesToHex bs =
-    let
-        len =
-            Bytes.width bs
-
-        decoder =
-            Bytes.Decode.loop ( len, [] )
-                (\( remaining, acc ) ->
-                    if remaining <= 0 then
-                        Bytes.Decode.succeed (Bytes.Decode.Done (List.reverse acc))
-
-                    else
-                        Bytes.Decode.unsignedInt8
-                            |> Bytes.Decode.map
-                                (\byte ->
-                                    Bytes.Decode.Loop
-                                        ( remaining - 1
-                                        , byteToHex byte :: acc
-                                        )
-                                )
-                )
-    in
-    case Bytes.Decode.decode decoder bs of
-        Just hexChars ->
-            String.join "" hexChars
-
-        Nothing ->
-            ""
-
-
-byteToHex : Int -> String
-byteToHex byte =
-    let
-        hi =
-            Bitwise.shiftRightZfBy 4 byte
-
-        lo =
-            Bitwise.and 0x0F byte
-    in
-    String.fromChar (nibbleToChar hi) ++ String.fromChar (nibbleToChar lo)
-
-
-nibbleToChar : Int -> Char
-nibbleToChar n =
-    if n < 10 then
-        Char.fromCode (n + 0x30)
-
-    else
-        Char.fromCode (n - 10 + 0x61)
 
 
 {-| Helper: encode with deterministic strategy and return hex string.
 -}
 encodeToHex : CE.Encoder -> String
 encodeToHex encoder =
-    bytesToHex (CE.encode CE.deterministic encoder)
+    Hex.fromBytes (CE.encode CE.deterministic encoder)
 
 
 {-| Helper: decode from hex using a given decoder.
 -}
 decodeFromHex : BD.Decoder ctx String a -> String -> Result (BD.Error ctx String) a
 decodeFromHex decoder hex =
-    BD.decode decoder (hexToBytes hex)
+    BD.decode decoder (Hex.toBytesUnchecked hex)
 
 
 
@@ -454,9 +283,9 @@ encodeBytesTests : Test
 encodeBytesTests =
     describe "Cbor.Encode.bytes"
         [ test "empty bytes" <|
-            \_ -> encodeToHex (CE.bytes (hexToBytes "")) |> Expect.equal "40"
+            \_ -> encodeToHex (CE.bytes (Hex.toBytesUnchecked "")) |> Expect.equal "40"
         , test "h'01020304'" <|
-            \_ -> encodeToHex (CE.bytes (hexToBytes "01020304")) |> Expect.equal "4401020304"
+            \_ -> encodeToHex (CE.bytes (Hex.toBytesUnchecked "01020304")) |> Expect.equal "4401020304"
         ]
 
 
@@ -475,7 +304,7 @@ decodeBytesTests =
         , test "h'01020304'" <|
             \_ ->
                 decodeFromHex CD.bytes "4401020304"
-                    |> Result.map bytesToHex
+                    |> Result.map Hex.fromBytes
                     |> Expect.equal (Ok "01020304")
         ]
 
@@ -838,7 +667,7 @@ strategyTests =
                                 ]
                             )
                 in
-                bytesToHex encoded
+                Hex.fromBytes encoded
                     |> String.left 6
                     |> Expect.equal "a20163"
 
@@ -854,7 +683,7 @@ strategyTests =
                                 ]
                             )
                 in
-                bytesToHex encoded
+                Hex.fromBytes encoded
                     |> String.left 6
                     |> Expect.equal "a20a63"
 
@@ -868,8 +697,8 @@ strategyTests =
                             , ( 1, Just (CE.int 30) )
                             ]
                 in
-                bytesToHex (CE.encode CE.deterministic encoder)
-                    |> Expect.equal (bytesToHex (CE.encode CE.unsorted encoder))
+                Hex.fromBytes (CE.encode CE.deterministic encoder)
+                    |> Expect.equal (Hex.fromBytes (CE.encode CE.unsorted encoder))
 
         -- keys 0, 1 are already in order
         , test "keyedRecord omits Nothing entries" <|
@@ -883,7 +712,7 @@ strategyTests =
                             ]
                 in
                 -- Should produce a 2-entry map (key 0 and key 2), not 3
-                bytesToHex (CE.encode CE.deterministic encoder)
+                Hex.fromBytes (CE.encode CE.deterministic encoder)
                     |> String.left 2
                     |> Expect.equal "a2"
         ]
@@ -916,7 +745,7 @@ itemDecoderTests =
             \_ ->
                 case decodeFromHex CD.item "4401020304" of
                     Ok (CborByteString bs) ->
-                        Expect.equal "01020304" (bytesToHex bs)
+                        Expect.equal "01020304" (Hex.fromBytes bs)
 
                     other ->
                         Expect.fail ("Expected CborByteString, got " ++ Debug.toString other)
