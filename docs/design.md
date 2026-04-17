@@ -249,8 +249,6 @@ Primitive combinators always use shortest encoding (all canonical forms agree on
 | `ctap2` | Group by major type, then shorter first, then lexicographic | CTAP2 (FIDO) |
 | `unsorted` | Preserve insertion order | — |
 
-For typical map keys (integers and strings only), all three sorted strategies produce identical results. Differences only surface with mixed-type or complex keys.
-
 **Predefined strategies:**
 
 ```elm
@@ -287,12 +285,12 @@ Cbor.Encode.encode myCustomStrategy (personEncoder alice)
 ```elm
 -- Primitives
 Cbor.Decode.int : Decoder ctx err Int              -- major types 0, 1; fails if |value| > 2^52
-Cbor.Decode.bigInt : Decoder ctx err ( Sign, Bytes ) -- major types 0, 1; full 64-bit range
+Cbor.Decode.bigInt : Decoder ctx err ( Sign, Bytes ) -- major types 0, 1 + tags 2, 3; minimal big-endian bytes
 Cbor.Decode.float : Decoder ctx err Float          -- major type 7, additional info 25/26/27
 Cbor.Decode.bool : Decoder ctx err Bool            -- 0xf4 (false), 0xf5 (true)
 Cbor.Decode.null : a -> Decoder ctx err a          -- 0xf6; returns the provided value
-Cbor.Decode.string : Decoder ctx err String        -- major type 3 (definite + indefinite)
-Cbor.Decode.bytes : Decoder ctx err Bytes          -- major type 2 (definite + indefinite)
+Cbor.Decode.string : Decoder ctx err String        -- major type 3; concatenates indefinite-length chunks
+Cbor.Decode.bytes : Decoder ctx err Bytes          -- major type 2; concatenates indefinite-length chunks
 
 -- Collections
 Cbor.Decode.array : Decoder ctx err a -> Decoder ctx err (List a)
@@ -417,13 +415,13 @@ Cbor.Decode.item : Decoder ctx err CborItem      -- full CBOR parser
 
 Use cases: round-tripping unknown CBOR, diagnostic notation (`Cbor.diagnose : CborItem -> String`), inspecting/debugging arbitrary data, skipping unknown values.
 
-### Open Design Questions
+### Resolved Design Decisions
 
-1. **`bigInt` range**: Should `bigInt` decode all integers (returning 8-byte zero-padded `Bytes` for small values too) or only values outside the Int52 range? Universal is more convenient; restricted avoids surprising zero-padding.
+1. **`bigInt` range**: `bigInt` decodes any CBOR integer (major types 0 and 1), including values tagged with `PositiveBigNum` (tag 2) and `NegativeBigNum` (tag 3). Returns `( Sign, Bytes )` where `Bytes` is the minimal big-endian representation (no zero-padding). Small values that fit in Int52 are still accepted — they produce minimal byte sequences.
 
-2. **Indefinite-length string/bytes decoding**: Should `string` and `bytes` concatenate indefinite-length chunks transparently, or should indefinite-length strings/bytes only be decoded via `item`? Transparent concatenation is simpler for consumers but hides chunk structure.
+2. **Indefinite-length string/bytes decoding**: `string` and `bytes` concatenate indefinite-length chunks transparently. The caller receives a single `String` or `Bytes` value regardless of whether definite or indefinite encoding was used. The `item` decoder preserves chunk structure via `CborStringChunked` / `CborByteStringChunked`.
 
-3. **Strategy extensibility**: Is `{ sortKeys, lengthMode }` sufficient? Potential extensions: per-subtree strategy overrides (`withStrategy : Strategy -> Encoder -> Encoder`), separate length modes for arrays vs maps.
+3. **Strategy extensibility**: The current `{ sortKeys, lengthMode }` is sufficient for now. Per-subtree strategy overrides (e.g., `withStrategy : Strategy -> Encoder -> Encoder`) may be needed for formats that impose different constraints on substructures, but this will be deferred until a concrete use case confirms the need.
 
 ### Performance Rationale
 
