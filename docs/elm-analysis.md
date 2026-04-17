@@ -350,6 +350,224 @@ A decoder is `(DataView, offset) -> (newOffset, value)`. Out-of-bounds reads thr
 
 ---
 
+## 6. elm-cardano/bytes-decoder Package
+
+### Overview
+
+`elm-cardano/bytes-decoder` (v1.1.0, BSD-3-Clause) is a drop-in replacement for `Bytes.Decode` that adds structured error reporting, `oneOf` backtracking, and random access while maintaining near-zero overhead on the happy path. It exposes a single module `Bytes.Decoder` and depends on `elm/bytes`, `elm/core`, and `elm-cardano/float16`.
+
+### Core Architecture: Dual-Path Decoding
+
+The central design is a decoder that carries **two execution strategies**:
+
+```elm
+type Decoder context error value
+    = Decoder (Maybe (Decode.Decoder value)) (State -> DecodeResult context error value)
+
+type DecodeResult context error value
+    = Good value State
+    | Bad (Error context error)
+
+type alias State =
+    { offset : Int
+    , input : Bytes
+    }
+```
+
+1. **Fast path** — an optional raw `Bytes.Decode.Decoder` composed via `Decode.map2`, `Decode.andThen`, `Decode.loop`, etc. When present, `decode` executes a single `Decode.decode` call through the JS kernel with zero per-step overhead.
+
+2. **Slow path** — a state-passing function that tracks byte offsets, reports structured errors, and supports backtracking. Only executed when the fast path is absent or returns `Nothing` (i.e. an error occurred).
+
+The entry point tries the fast path first and falls back on failure:
+
+```elm
+decode : Decoder context error value -> Bytes -> Result (Error context error) value
+decode (Decoder maybeDec slow) input =
+    case maybeDec of
+        Just dec ->
+            case Decode.decode dec input of
+                Just v -> Ok v
+                Nothing -> decodeSlow slow input
+        Nothing ->
+            decodeSlow slow input
+```
+
+The key insight: most decoders succeed on well-formed input. By deferring error tracking to a re-decode, the happy path pays no cost for error reporting.
+
+### Error Type
+
+```elm
+type Error context error
+    = InContext { label : context, start : Int } (Error context error)
+    | OutOfBounds { at : Int, bytes : Int }
+    | Custom { at : Int } error
+    | BadOneOf { at : Int } (List (Error context error))
+```
+
+Both `context` and `error` are user-chosen type parameters, allowing custom context labels and custom error payloads. The recursive `InContext` variant creates a context stack from outer to inner failure point.
+
+### Primitive Decoders
+
+All primitives delegate to `elm/bytes` decoders and have fast paths:
+
+```elm
+unsignedInt8 : Decoder context error Int
+unsignedInt16 : Bytes.Endianness -> Decoder context error Int
+unsignedInt32 : Bytes.Endianness -> Decoder context error Int
+signedInt8 : Decoder context error Int
+signedInt16 : Bytes.Endianness -> Decoder context error Int
+signedInt32 : Bytes.Endianness -> Decoder context error Int
+float16 : Bytes.Endianness -> Decoder context error Float  -- via elm-cardano/float16
+float32 : Bytes.Endianness -> Decoder context error Float
+float64 : Bytes.Endianness -> Decoder context error Float
+bytes : Int -> Decoder context error Bytes
+string : Int -> Decoder context error String
+```
+
+All are built with a shared `fromInnerDecoder` helper:
+
+```elm
+fromInnerDecoder : Decode.Decoder v -> Int -> Decoder context error v
+fromInnerDecoder dec byteLength =
+    Decoder
+        (Just dec)
+        (\state ->
+            let combined = Decode.map2 (\_ v -> v) (Decode.bytes state.offset) dec
+            in
+            case Decode.decode combined state.input of
+                Just res -> Good res { offset = state.offset + byteLength, input = state.input }
+                Nothing -> Bad (OutOfBounds { at = state.offset, bytes = byteLength })
+        )
+```
+
+The slow path skips to the current offset (via `Decode.bytes state.offset`), decodes, and reports `OutOfBounds` on failure.
+
+### Combinators and Fast-Path Preservation
+
+| Combinator | Fast Path | Notes |
+|------------|-----------|-------|
+| `succeed`, `map`, `map2`–`map5` | Always | Composed via `Decode.map`, `Decode.map2`, etc. |
+| `keep`, `ignore`, `skip` | Conditional | Fast if both operands are fast |
+| `andThen` | Conditional | Fast if callback returns a decoder with a fast path |
+| `loop`, `repeat` | Conditional | `loop` uses `Decode.loop` (tight JS while loop); stays fast if callback returns fast decoders |
+| `fail` | Never | No value can be produced; forces slow path |
+| `oneOf` | Never | Requires backtracking, which `Bytes.Decode` cannot do |
+| `position`, `randomAccess` | Never | Offset tracking requires slow path state |
+| `inContext` | Preserved | Wraps error only on failure; fast path passed through unchanged |
+
+The `map2` implementation illustrates the pattern — compose fast paths when both exist, otherwise drop to slow:
+
+```elm
+map2 f (Decoder maybeDecX slowX) (Decoder maybeDecY slowY) =
+    Decoder
+        (case ( maybeDecX, maybeDecY ) of
+            ( Just decX, Just decY ) -> Just (Decode.map2 f decX decY)
+            _ -> Nothing
+        )
+        (\state ->
+            case slowX state of
+                Good x s1 ->
+                    case slowY s1 of
+                        Good y s2 -> Good (f x y) s2
+                        Bad e -> Bad e
+                Bad e -> Bad e
+        )
+```
+
+### Pipeline API
+
+Applicative-style pipeline combinators for sequential decoding:
+
+```elm
+keep : Decoder context error a -> Decoder context error (a -> b) -> Decoder context error b
+ignore : Decoder context error ignore -> Decoder context error keep -> Decoder context error keep
+skip : Int -> Decoder context error value -> Decoder context error value
+```
+
+Usage:
+
+```elm
+succeed MyRecord
+    |> keep unsignedInt8
+    |> keep (unsignedInt16 BE)
+    |> ignore unsignedInt8
+    |> keep (bytes 4)
+```
+
+### Backtracking with oneOf
+
+```elm
+oneOf : List (Decoder context error value) -> Decoder context error value
+```
+
+All alternatives receive the **same state** (same offset). On failure, the error is collected but state is not carried forward. Returns the first success or a `BadOneOf` containing all sub-errors.
+
+### Random Access
+
+```elm
+type Position
+position : Decoder context error Position
+startOfInput : Position
+randomAccess : { offset : Int, relativeTo : Position } -> Decoder context error value -> Decoder context error value
+```
+
+`randomAccess` decodes at an absolute offset (`relativeTo + offset`) then **restores the original state** — sequential parsing resumes where it was before the jump.
+
+### Escape Hatch
+
+```elm
+fromDecoderUnsafe : error -> Int -> Decode.Decoder value -> Decoder context error value
+```
+
+Wraps a raw `Bytes.Decode.Decoder` with error reporting. The caller must provide the **exact** byte width; incorrect width corrupts offset tracking. Only safe for fixed-width decoders.
+
+### Performance Characteristics
+
+Benchmarks from the package (48-byte applicative packet, 57-byte dynamic message):
+
+| Implementation | Applicative Packet | Dynamic Message |
+|----------------|-------------------|-----------------|
+| `elm/bytes` (baseline) | 822 ns/run | 509 ns/run |
+| `elm-cardano/bytes-decoder` | 869 ns/run (+5%) | 756 ns/run (+49%) |
+| `zwilias/elm-bytes-parser` | 3452 ns/run (+320%) | 2949 ns/run (+480%) |
+
+The +5% overhead for pure applicative decoding comes from the thin `Decoder` wrapper. The +49% for `andThen` + `loop` is higher because conditional fast-path checks add branching, but still well under alternatives.
+
+### Comparison to elm/bytes and Alternatives
+
+| Feature | elm/bytes | elm-cardano/bytes-decoder | zwilias/elm-bytes-parser |
+|---------|-----------|---------------------------|--------------------------|
+| Sequential decode | Yes | Yes | Yes |
+| Applicative (map2–5) | Yes | Yes | Yes |
+| Monadic (andThen) | Yes | Yes | Yes |
+| Loop/repeat | Yes | Yes | Yes |
+| Backtracking (oneOf) | No | Yes | Yes |
+| Error reporting | `Maybe` (no info) | Rich ADT with offsets | Rich ADT with offsets |
+| Error context nesting | No | Yes | Yes |
+| Position tracking | No | Yes | Yes |
+| Random access | No | Yes | Yes |
+| Pipeline (keep/ignore) | No | Yes | Yes |
+| float16 support | No | Yes | No |
+| Happy path overhead | 0% | +5–50% | +300–480% |
+
+### Implications for the CBOR Library
+
+1. **Decoder foundation**: `elm-cardano/bytes-decoder` is a strong candidate as the decoding foundation for `Cbor.Decode`. Its combinator API mirrors `elm/json` patterns (which is the design goal from `design.md`), and its `andThen` + `loop` performance is acceptable for CBOR's tag-dispatched, length-prefixed structure.
+
+2. **Error reporting**: CBOR decoding benefits from structured errors. The `inContext` mechanism maps naturally to CBOR's nested structure (e.g., `InContext "map key 3"`, `InContext "tag 24 payload"`). The `context` type parameter can be specialized to a CBOR-specific context type.
+
+3. **No 64-bit integers**: Like `elm/bytes`, there is no `unsignedInt64` or `signedInt64`. CBOR's 64-bit integer arguments (additional info 27) must still be handled by reading two 32-bit words or 8 individual bytes, consistent with the constraints described in Section 3 above.
+
+4. **float16 support**: The `float16` decoder (via `elm-cardano/float16`) directly covers CBOR major type 7 half-precision floats (additional info 25), eliminating the need for a custom implementation.
+
+5. **No encoding**: The package only covers decoding. `Cbor.Encode` will still build on `Bytes.Encode` from `elm/bytes` directly.
+
+6. **oneOf for CBOR**: While `oneOf` has no fast path, it maps to CBOR's tag-dispatched decoding pattern. However, explicit `andThen`-based tag dispatch (read tag byte, then branch) is both faster and more natural for CBOR's wire format — `oneOf` is better reserved for genuinely ambiguous formats.
+
+7. **Random access**: Potentially useful for CBOR's tag 24 (encoded CBOR data item embedded in a byte string), where the decoder may need to jump into a nested byte string payload.
+
+---
+
 ## References
 
 - `/Users/piz/git/elm/core/src/Basics.elm` -- Int and Float type definitions
