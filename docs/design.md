@@ -219,11 +219,17 @@ Cbor.Encode.array : List Encoder -> Encoder
 Cbor.Encode.map : List ( Encoder, Encoder ) -> Encoder
 Cbor.Encode.tag : Tag -> Encoder -> Encoder
 
+-- Record encoding (strategy determines key ordering and definite/indefinite length)
+-- Nothing entries are omitted from the output (optional field absent)
+Cbor.Encode.record : (k -> Encoder) -> List ( k, Maybe Encoder ) -> Encoder
+
 -- Convenience
 Cbor.Encode.list : (a -> Encoder) -> List a -> Encoder
+Cbor.Encode.sequence : List Encoder -> Encoder
 
--- Escape hatch (lossless: ignores strategy entirely, respects CborItem's stored widths/order/length)
-Cbor.Encode.item : CborItem -> Encoder
+-- Escape hatches
+Cbor.Encode.item : CborItem -> Encoder          -- lossless (ignores strategy entirely)
+Cbor.Encode.rawUnsafe : Bytes -> Encoder        -- inject pre-encoded CBOR (no validation)
 
 -- Run encoding
 Cbor.Encode.encode : Strategy -> Encoder -> Bytes
@@ -263,9 +269,9 @@ Cbor.Encode.unsorted : Strategy         -- insertion order, definite length
 ```elm
 personEncoder : Person -> Encoder
 personEncoder p =
-    Cbor.Encode.map
-        [ ( Cbor.Encode.int 0, Cbor.Encode.string p.name )
-        , ( Cbor.Encode.int 1, Cbor.Encode.int p.age )
+    Cbor.Encode.record Cbor.Encode.int
+        [ ( 0, Just (Cbor.Encode.string p.name) )
+        , ( 1, Just (Cbor.Encode.int p.age) )
         ]
 
 -- Apply different strategies:
@@ -278,7 +284,7 @@ Cbor.Encode.encode myCustomStrategy (personEncoder alice)
 
 **Definite vs indefinite length**: The strategy's `lengthMode` applies to arrays and maps only. Strings and byte strings always use definite length via `string`/`bytes`. For indefinite-length (chunked) strings/bytes, use the explicit `stringChunked`/`bytesChunked` combinators.
 
-**`item` and explicit-width combinators** ignore the strategy entirely — their output is fixed regardless of strategy. This ensures lossless round-tripping and explicit-width encoding are not affected by the strategy.
+**`item`, `rawUnsafe`, and explicit-width combinators** ignore the strategy entirely — their output is fixed regardless of strategy. This ensures lossless round-tripping, raw injection, and explicit-width encoding are not affected by the strategy.
 
 ### Decoding Combinators
 
@@ -299,7 +305,18 @@ Cbor.Decode.field : k -> Decoder ctx err k -> Decoder ctx err v -> Decoder ctx e
 Cbor.Decode.foldEntries : Decoder ctx err k -> (k -> acc -> Decoder ctx err acc) -> acc -> Decoder ctx err acc
 Cbor.Decode.tag : Tag -> Decoder ctx err a -> Decoder ctx err a
 
--- Structure headers (for heterogeneous structures)
+-- Record builder (ordered maps with count validation)
+Cbor.Decode.record : Decoder ctx err k -> a -> RecordBuilder ctx err k a
+Cbor.Decode.required : k -> Decoder ctx err v -> RecordBuilder ctx err k (v -> a) -> RecordBuilder ctx err k a
+Cbor.Decode.optional : k -> Decoder ctx err v -> v -> RecordBuilder ctx err k (v -> a) -> RecordBuilder ctx err k a
+Cbor.Decode.buildRecord : RecordBuilder ctx err k a -> Decoder ctx err a
+
+-- Tuple builder (ordered arrays with count validation)
+Cbor.Decode.tuple : a -> TupleBuilder ctx err a
+Cbor.Decode.element : Decoder ctx err v -> TupleBuilder ctx err (v -> a) -> TupleBuilder ctx err a
+Cbor.Decode.buildTuple : TupleBuilder ctx err a -> Decoder ctx err a
+
+-- Structure headers (for manual heterogeneous structures)
 Cbor.Decode.arrayHeader : Decoder ctx err (Maybe Int)   -- Nothing for indefinite
 Cbor.Decode.mapHeader : Decoder ctx err (Maybe Int)     -- Nothing for indefinite
 
@@ -309,25 +326,155 @@ Cbor.Decode.item : Decoder ctx err CborItem
 
 Composition combinators (`succeed`, `fail`, `andThen`, `oneOf`, `map`, `map2`–`map5`, `keep`, `ignore`, `loop`, `repeat`, `inContext`) come from `Bytes.Decoder` directly — no re-exports.
 
+### Record Encoding
+
+```elm
+record : (k -> Encoder) -> List ( k, Maybe Encoder ) -> Encoder
+```
+
+Encodes a record as a CBOR map with a shared key encoder. `Nothing` entries are omitted from the output — this distinguishes "field absent" from "field is null".
+
+```elm
+personEncoder : Person -> Encoder
+personEncoder p =
+    Cbor.Encode.record Cbor.Encode.int
+        [ ( 0, Just (Cbor.Encode.string p.name) )
+        , ( 1, Just (Cbor.Encode.int p.age) )
+        , ( 2, Maybe.map Cbor.Encode.string p.email )  -- omitted when Nothing
+        ]
+```
+
+Internally, `record` filters out `Nothing` entries, applies the key encoder, and delegates to `map`. Strategy (key sorting, length mode) still applies.
+
+### Sequence Encoding
+
+```elm
+sequence : List Encoder -> Encoder
+```
+
+Concatenates multiple CBOR items into a single byte output without a wrapping array. Supports CBOR Sequences (RFC 8742).
+
+```elm
+-- Log file: one CBOR item per entry
+encodeLog : List LogEntry -> Bytes
+encodeLog entries =
+    entries
+        |> List.map encodeEntry
+        |> Cbor.Encode.sequence
+        |> Cbor.Encode.encode Cbor.Encode.deterministic
+```
+
+Implementation: apply the strategy to each encoder, combine with `Bytes.Encode.sequence`.
+
+### Raw Bytes Injection
+
+```elm
+rawUnsafe : Bytes -> Encoder
+```
+
+Injects pre-encoded CBOR bytes directly without validation. Ignores strategy (like `item`). If the bytes are not valid CBOR, the output is malformed — hence "Unsafe". Use case: caching pre-encoded fragments, embedding CBOR from external sources.
+
 ### Map Decoding
 
-#### Ordered keys (sequential field matching)
+#### Record builder (ordered keys with count validation)
+
+```elm
+record : Decoder ctx err k -> a -> RecordBuilder ctx err k a
+required : k -> Decoder ctx err v -> RecordBuilder ctx err k (v -> a) -> RecordBuilder ctx err k a
+optional : k -> Decoder ctx err v -> v -> RecordBuilder ctx err k (v -> a) -> RecordBuilder ctx err k a
+buildRecord : RecordBuilder ctx err k a -> Decoder ctx err a
+```
+
+The builder tracks field counts automatically. `buildRecord` reads the map header, validates the count (`requiredCount <= headerCount <= requiredCount + optionalCount`), runs the decoder pipeline, and verifies all entries were consumed.
+
+**All required fields:**
+
+```elm
+decodePerson : Decoder ctx err Person
+decodePerson =
+    Cbor.Decode.record Cbor.Decode.int Person
+        |> Cbor.Decode.required 0 Cbor.Decode.string
+        |> Cbor.Decode.required 1 Cbor.Decode.int
+        |> Cbor.Decode.buildRecord
+```
+
+**With optional fields:**
+
+```elm
+decodePerson : Decoder ctx err Person
+decodePerson =
+    Cbor.Decode.record Cbor.Decode.int Person
+        |> Cbor.Decode.required 0 Cbor.Decode.string
+        |> Cbor.Decode.required 1 Cbor.Decode.int
+        |> Cbor.Decode.optional 2 Cbor.Decode.string ""
+        |> Cbor.Decode.required 3 Cbor.Decode.bool
+        |> Cbor.Decode.buildRecord
+```
+
+**Internal state threading**: The builder uses `andThen` internally (not `keep`) to thread a state through the pipeline:
+
+```elm
+type alias State k a =
+    { remaining : Int       -- values left to consume from stream
+    , pendingKey : Maybe k  -- key read but not yet matched
+    , value : a             -- partially applied constructor
+    }
+```
+
+- `remaining` tracks values left to decode. Only decrements when a value is consumed.
+- `pendingKey` stores a key read from the stream that didn't match an `optional` field. The next step uses it instead of reading a new key.
+
+**`required`**: reads key (from `pendingKey` or stream), must match expected key via `==`, decodes value, decrements `remaining`.
+
+**`optional`**: if `remaining == 0` and no `pendingKey`, uses default. Otherwise reads key — if it matches, decodes value and decrements `remaining`. If it doesn't match, stashes the key in `pendingKey` and uses the default. `remaining` stays unchanged because the entry's value was not consumed.
+
+**`buildRecord`**: validates `requiredCount <= headerCount <= requiredCount + optionalCount`, runs the decoder, then checks `remaining == 0 && pendingKey == Nothing`.
+
+**Trace — optional field absent** (`{ 0: "Alice", 1: 30, 3: true }`, 3 entries):
+
+| Step | Stream after | remaining | pendingKey | value |
+|------|-------------|-----------|------------|-------|
+| start | `[k0,v0,k1,v1,k3,v3]` | 3 | Nothing | `Person` |
+| required 0 | `[k1,v1,k3,v3]` | 2 | Nothing | `Person "Alice"` |
+| required 1 | `[k3,v3]` | 1 | Nothing | `Person "Alice" 30` |
+| optional 2 | `[v3]` | 1 | Just 3 | `Person "Alice" 30 ""` |
+| required 3 | `[]` | 0 | Nothing | `Person "Alice" 30 "" True` |
+
+`optional 2` reads key 3, no match, stashes it. `required 3` uses the stashed key, only reads the value.
+
+**Constraint**: keys must be in ascending order. The stashed key is always "ahead" of subsequent expected keys. For unordered keys, use `foldEntries`.
+
+**Definite-length only**: the builder requires a definite map header. For indefinite-length maps, use `foldEntries`.
+
+#### Tuple builder (ordered arrays with count validation)
+
+```elm
+tuple : a -> TupleBuilder ctx err a
+element : Decoder ctx err v -> TupleBuilder ctx err (v -> a) -> TupleBuilder ctx err a
+buildTuple : TupleBuilder ctx err a -> Decoder ctx err a
+```
+
+Same pattern as the record builder but for arrays. `buildTuple` reads the array header and validates count.
+
+```elm
+decodePoint : Decoder ctx err Point
+decodePoint =
+    Cbor.Decode.tuple Point
+        |> Cbor.Decode.element Cbor.Decode.float
+        |> Cbor.Decode.element Cbor.Decode.float
+        |> Cbor.Decode.element Cbor.Decode.float
+        |> Cbor.Decode.buildTuple
+```
+
+Internally, `TupleBuilder` counts `element` steps and validates against the array header. No `pendingKey` needed — elements are positional. Definite-length only.
+
+#### Low-level field combinator
 
 ```elm
 field : k -> Decoder ctx err k -> Decoder ctx err v -> Decoder ctx err v
 ```
 
-Decodes the next key, compares to expected `k` via `==`, decodes value on match, fails on mismatch. Requires keys in expected order — appropriate for deterministic CBOR.
-
-```elm
-decodeRecord =
-    Cbor.Decode.mapHeader
-        |> Bytes.Decoder.andThen (\_ ->
-            Bytes.Decoder.map2 MyRecord
-                (Cbor.Decode.field 0 Cbor.Decode.int Cbor.Decode.string)
-                (Cbor.Decode.field 1 Cbor.Decode.int Cbor.Decode.int)
-        )
-```
+Decodes the next key, compares to expected `k` via `==`, decodes value on match, fails on mismatch. This is the primitive used internally by `required`. It can also be used directly with `mapHeader` + `keep`/`ignore` for manual record decoding without the builder.
 
 #### Unordered keys (fold over entries)
 
@@ -370,6 +517,8 @@ decodePerson =
 ```
 
 **Important**: the handler MUST decode exactly one value per call (advancing the byte offset past the entry's value). Failing to consume the value corrupts the offset for subsequent entries.
+
+Use `foldEntries` when: keys are unordered, indefinite-length maps, or complex dispatch logic that doesn't fit the builder pattern.
 
 #### Skipping entries
 
