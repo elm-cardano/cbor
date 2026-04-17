@@ -1,31 +1,11 @@
 module Cbor.Encode exposing
-    ( Encoder
-    , Strategy
-    , encode
-    , int
-    , float
-    , bool
-    , null
-    , undefined
-    , string
-    , bytes
-    , simple
-    , intWithWidth
-    , floatWithWidth
-    , stringChunked
-    , bytesChunked
-    , array
-    , map
-    , tag
-    , keyedRecord
-    , list
-    , sequence
-    , item
-    , rawUnsafe
-    , deterministic
-    , canonical
-    , ctap2
-    , unsorted
+    ( Encoder, Strategy, encode
+    , int, float, bool, null, undefined, string, bytes, simple
+    , intWithWidth, floatWithWidth
+    , stringChunked, bytesChunked
+    , array, map, tag, keyedRecord, list, sequence
+    , item, rawUnsafe
+    , deterministic, canonical, ctap2, unsorted
     )
 
 {-| CBOR encoding combinators.
@@ -583,10 +563,10 @@ encodeHeader majorType argument =
         -- 64-bit: split into two 32-bit halves
         let
             hi =
-                argument // 0x0100000000
+                argument // 0x0000000100000000
 
             lo =
-                argument - hi * 0x0100000000
+                argument - hi * 0x0000000100000000
         in
         BE.sequence
             [ BE.unsignedInt8 (mt + 27)
@@ -626,10 +606,10 @@ encodeHeaderWithWidth width majorType argument =
         IW64 ->
             let
                 hi =
-                    argument // 0x0100000000
+                    argument // 0x0000000100000000
 
                 lo =
-                    argument - hi * 0x0100000000
+                    argument - hi * 0x0000000100000000
             in
             BE.sequence
                 [ BE.unsignedInt8 (mt + 27)

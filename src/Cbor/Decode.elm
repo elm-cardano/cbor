@@ -1,28 +1,9 @@
 module Cbor.Decode exposing
-    ( int
-    , bigInt
-    , float
-    , bool
-    , null
-    , string
-    , bytes
-    , array
-    , keyValue
-    , field
-    , foldEntries
-    , tag
-    , RecordBuilder
-    , record
-    , element
-    , optionalElement
-    , buildRecord
-    , KeyedRecordBuilder
-    , keyedRecord
-    , required
-    , optional
-    , buildKeyedRecord
-    , arrayHeader
-    , mapHeader
+    ( int, bigInt, float, bool, null, string, bytes
+    , array, keyValue, field, foldEntries, tag
+    , RecordBuilder, record, element, optionalElement, buildRecord
+    , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
+    , arrayHeader, mapHeader
     , item
     )
 
@@ -126,7 +107,7 @@ decodeArgument additionalInfo =
         u32
 
     else if additionalInfo == 27 then
-        BD.map2 (\hi lo -> hi * 0x0100000000 + lo) u32 u32
+        BD.map2 (\hi lo -> hi * 0x0000000100000000 + lo) u32 u32
 
     else
         BD.fail ("Reserved additional info: " ++ String.fromInt additionalInfo)
@@ -149,7 +130,7 @@ decodeArgument64 additionalInfo =
         BD.map (\v -> ( IW32, v )) u32
 
     else if additionalInfo == 27 then
-        BD.map2 (\hi lo -> ( IW64, hi * 0x0100000000 + lo )) u32 u32
+        BD.map2 (\hi lo -> ( IW64, hi * 0x0000000100000000 + lo )) u32 u32
 
     else
         BD.fail ("Reserved additional info: " ++ String.fromInt additionalInfo)

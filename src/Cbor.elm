@@ -1,11 +1,5 @@
 module Cbor exposing
-    ( CborItem(..)
-    , FloatWidth(..)
-    , IntWidth(..)
-    , Length(..)
-    , Sign(..)
-    , SimpleWidth(..)
-    , Tag(..)
+    ( CborItem(..), IntWidth(..), FloatWidth(..), SimpleWidth(..), Length(..), Sign(..), Tag(..)
     , diagnose
     , tagToInt
     )
