@@ -9,9 +9,15 @@ Elm's `Int` is defined as an opaque type in `Basics.elm`. At runtime (JavaScript
 Key implementation details from `Elm/Kernel/Basics.js`:
 
 ```javascript
-var _Basics_idiv = F2(function(a, b) { return (a / b) | 0; });
-function _Basics_truncate(n) { return n | 0; }
-function _Basics_toFloat(x) { return x; }  // no-op: Int IS a JS number
+var _Basics_idiv = F2(function (a, b) {
+  return (a / b) | 0;
+});
+function _Basics_truncate(n) {
+  return n | 0;
+}
+function _Basics_toFloat(x) {
+  return x;
+} // no-op: Int IS a JS number
 ```
 
 Integer division uses `| 0` to truncate the floating-point result back to a 32-bit signed integer. The `toFloat` conversion is a no-op because both types are JavaScript numbers internally.
@@ -34,15 +40,15 @@ Elm's `Float` follows IEEE 754 double-precision (64-bit). It supports `NaN` and 
 
 All functions in `Bitwise.elm`, implemented in `Elm/Kernel/Bitwise.js`:
 
-| Function | Elm Signature | JS Operator |
-|----------|--------------|-------------|
-| `and` | `Int -> Int -> Int` | `a & b` |
-| `or` | `Int -> Int -> Int` | `a \| b` |
-| `xor` | `Int -> Int -> Int` | `a ^ b` |
-| `complement` | `Int -> Int` | `~a` |
-| `shiftLeftBy` | `Int -> Int -> Int` | `a << offset` |
-| `shiftRightBy` | `Int -> Int -> Int` | `a >> offset` (arithmetic, sign-propagating) |
-| `shiftRightZfBy` | `Int -> Int -> Int` | `a >>> offset` (logical, zero-fill) |
+| Function         | Elm Signature       | JS Operator                                  |
+| ---------------- | ------------------- | -------------------------------------------- |
+| `and`            | `Int -> Int -> Int` | `a & b`                                      |
+| `or`             | `Int -> Int -> Int` | `a \| b`                                     |
+| `xor`            | `Int -> Int -> Int` | `a ^ b`                                      |
+| `complement`     | `Int -> Int`        | `~a`                                         |
+| `shiftLeftBy`    | `Int -> Int -> Int` | `a << offset`                                |
+| `shiftRightBy`   | `Int -> Int -> Int` | `a >> offset` (arithmetic, sign-propagating) |
+| `shiftRightZfBy` | `Int -> Int -> Int` | `a >>> offset` (logical, zero-fill)          |
 
 ### Limitations
 
@@ -78,19 +84,19 @@ Host endianness is detected at runtime by writing a `Uint32Array([1])` and readi
 
 ### Encoding API
 
-| Function | Width | Range |
-|----------|-------|-------|
-| `signedInt8` | 1 byte | -128 to 127 |
-| `signedInt16 Endianness` | 2 bytes | -32,768 to 32,767 |
-| `signedInt32 Endianness` | 4 bytes | -2,147,483,648 to 2,147,483,647 |
-| `unsignedInt8` | 1 byte | 0 to 255 |
-| `unsignedInt16 Endianness` | 2 bytes | 0 to 65,535 |
-| `unsignedInt32 Endianness` | 4 bytes | 0 to 4,294,967,295 |
-| `float32 Endianness` | 4 bytes | IEEE 754 single-precision |
-| `float64 Endianness` | 8 bytes | IEEE 754 double-precision |
-| `string` | variable | UTF-8 encoded |
-| `bytes` | variable | raw copy |
-| `sequence` | variable | list of encoders |
+| Function                   | Width    | Range                           |
+| -------------------------- | -------- | ------------------------------- |
+| `signedInt8`               | 1 byte   | -128 to 127                     |
+| `signedInt16 Endianness`   | 2 bytes  | -32,768 to 32,767               |
+| `signedInt32 Endianness`   | 4 bytes  | -2,147,483,648 to 2,147,483,647 |
+| `unsignedInt8`             | 1 byte   | 0 to 255                        |
+| `unsignedInt16 Endianness` | 2 bytes  | 0 to 65,535                     |
+| `unsignedInt32 Endianness` | 4 bytes  | 0 to 4,294,967,295              |
+| `float32 Endianness`       | 4 bytes  | IEEE 754 single-precision       |
+| `float64 Endianness`       | 8 bytes  | IEEE 754 double-precision       |
+| `string`                   | variable | UTF-8 encoded                   |
+| `bytes`                    | variable | raw copy                        |
+| `sequence`                 | variable | list of encoders                |
 
 The `Encoder` type is a tagged union:
 
@@ -114,8 +120,11 @@ A decoder is a function from `(Bytes, offset)` to `(newOffset, value)`. Decoding
 
 ```javascript
 function _Bytes_decode(decoder, bytes) {
-    try { return Just(A2(decoder, bytes, 0).b); }
-    catch(e) { return Nothing; }
+  try {
+    return Just(A2(decoder, bytes, 0).b);
+  } catch (e) {
+    return Nothing;
+  }
 }
 ```
 
@@ -143,28 +152,32 @@ Elm strings are JavaScript strings -- UTF-16 encoded, immutable, with no rope or
 
 ### Char API (Char.elm + Char.js)
 
-| Function | Elm Signature | Implementation |
-|----------|--------------|----------------|
-| `toCode` | `Char -> Int` | `charCodeAt(0)`, with surrogate-pair decoding for astral plane |
-| `fromCode` | `Int -> Char` | `String.fromCharCode(code)`, with surrogate encoding for > 0xFFFF |
-| `isHexDigit` | `Char -> Bool` | Pure Elm: checks 0x30-0x39, 0x41-0x46, 0x61-0x66 |
-| `isDigit` | `Char -> Bool` | Pure Elm: checks 0x30-0x39 |
+| Function     | Elm Signature  | Implementation                                                    |
+| ------------ | -------------- | ----------------------------------------------------------------- |
+| `toCode`     | `Char -> Int`  | `charCodeAt(0)`, with surrogate-pair decoding for astral plane    |
+| `fromCode`   | `Int -> Char`  | `String.fromCharCode(code)`, with surrogate encoding for > 0xFFFF |
+| `isHexDigit` | `Char -> Bool` | Pure Elm: checks 0x30-0x39, 0x41-0x46, 0x61-0x66                  |
+| `isDigit`    | `Char -> Bool` | Pure Elm: checks 0x30-0x39                                        |
 
 Key hex character code points:
 
-| Char | Code (hex) | Code (dec) |
-|------|-----------|------------|
-| `'0'`-`'9'` | 0x30-0x39 | 48-57 |
-| `'A'`-`'F'` | 0x41-0x46 | 65-70 |
-| `'a'`-`'f'` | 0x61-0x66 | 97-102 |
+| Char        | Code (hex) | Code (dec) |
+| ----------- | ---------- | ---------- |
+| `'0'`-`'9'` | 0x30-0x39  | 48-57      |
+| `'A'`-`'F'` | 0x41-0x46  | 65-70      |
+| `'a'`-`'f'` | 0x61-0x66  | 97-102     |
 
 ### String Kernel Functions (Elm/Kernel/String.js)
 
 **Concatenation:**
 
 ```javascript
-var _String_append = F2(function(a, b) { return a + b; });
-var _String_cons = F2(function(chr, str) { return chr + str; });
+var _String_append = F2(function (a, b) {
+  return a + b;
+});
+var _String_cons = F2(function (chr, str) {
+  return chr + str;
+});
 ```
 
 Simple `+` operator. No rope structure. Repeated concatenation is O(n²) in total length.
@@ -175,11 +188,11 @@ Simple `+` operator. No rope structure. Repeated concatenation is O(n²) in tota
 // _String_map and _String_filter both use this pattern:
 var array = new Array(len);
 // ... fill array ...
-return array.join('');
+return array.join("");
 
 // _String_fromList:
 function _String_fromList(chars) {
-    return __List_toArray(chars).join('');
+  return __List_toArray(chars).join("");
 }
 ```
 
@@ -188,8 +201,12 @@ The kernel consistently uses `Array.join('')` rather than repeated concatenation
 **Length and slicing:**
 
 ```javascript
-function _String_length(str) { return str.length; }  // O(1), counts UTF-16 code units
-var _String_slice = F3(function(start, end, str) { return str.slice(start, end); });
+function _String_length(str) {
+  return str.length;
+} // O(1), counts UTF-16 code units
+var _String_slice = F3(function (start, end, str) {
+  return str.slice(start, end);
+});
 ```
 
 `String.length` returns UTF-16 code unit count, not character count. For pure-ASCII hex strings, code units = characters, so length gives the expected result.
@@ -198,17 +215,20 @@ var _String_slice = F3(function(start, end, str) { return str.slice(start, end);
 
 ```javascript
 // foldl: iterates left-to-right
-var _String_foldl = F3(function(func, state, string) {
-    var len = string.length;
-    var i = 0;
-    while (i < len) {
-        var char = string[i];
-        var word = string.charCodeAt(i);
-        i++;
-        if (0xD800 <= word && word <= 0xDBFF) { char += string[i]; i++; }
-        state = A2(func, __Utils_chr(char), state);
+var _String_foldl = F3(function (func, state, string) {
+  var len = string.length;
+  var i = 0;
+  while (i < len) {
+    var char = string[i];
+    var word = string.charCodeAt(i);
+    i++;
+    if (0xd800 <= word && word <= 0xdbff) {
+      char += string[i];
+      i++;
     }
-    return state;
+    state = A2(func, __Utils_chr(char), state);
+  }
+  return state;
 });
 ```
 
@@ -218,19 +238,23 @@ Each iteration calls `A2(func, __Utils_chr(char), state)` -- one Elm function ap
 
 ```javascript
 // fromInt / fromFloat:
-function _String_fromNumber(number) { return number + ''; }
+function _String_fromNumber(number) {
+  return number + "";
+}
 
 // toInt: manual digit-by-digit parsing
 function _String_toInt(str) {
-    var total = 0;
-    var code0 = str.charCodeAt(0);
-    var start = code0 == 0x2B || code0 == 0x2D ? 1 : 0;
-    for (var i = start; i < str.length; ++i) {
-        var code = str.charCodeAt(i);
-        if (code < 0x30 || 0x39 < code) return __Maybe_Nothing;
-        total = 10 * total + code - 0x30;
-    }
-    return i == start ? __Maybe_Nothing : __Maybe_Just(code0 == 0x2D ? -total : total);
+  var total = 0;
+  var code0 = str.charCodeAt(0);
+  var start = code0 == 0x2b || code0 == 0x2d ? 1 : 0;
+  for (var i = start; i < str.length; ++i) {
+    var code = str.charCodeAt(i);
+    if (code < 0x30 || 0x39 < code) return __Maybe_Nothing;
+    total = 10 * total + code - 0x30;
+  }
+  return i == start
+    ? __Maybe_Nothing
+    : __Maybe_Just(code0 == 0x2d ? -total : total);
 }
 ```
 
@@ -248,17 +272,17 @@ fromList = Elm.Kernel.String.fromList   -- kernel: toArray(chars).join('')
 
 ### Performance Characteristics for Hex Strings
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| `String.length` | O(1) | Code unit count = char count for ASCII |
-| `String.slice i j` | O(j-i) | JS `.slice()`, allocates new string |
-| `String.append a b` | O(\|a\|+\|b\|) | Simple `+`, new string allocation |
-| `String.concat list` | O(total) | Uses JS `Array.join('')` |
-| `String.foldl f z s` | O(n) | One Elm function call + `__Utils_chr` alloc per char |
-| `String.fromList cs` | O(n) | List→Array→`.join('')` |
-| `String.toList s` | O(n) | `foldr (::) []`, builds linked list right-to-left |
-| `Char.toCode c` | O(1) | `charCodeAt(0)` |
-| `Char.fromCode n` | O(1) | `String.fromCharCode(n)` |
+| Operation            | Complexity     | Notes                                                |
+| -------------------- | -------------- | ---------------------------------------------------- |
+| `String.length`      | O(1)           | Code unit count = char count for ASCII               |
+| `String.slice i j`   | O(j-i)         | JS `.slice()`, allocates new string                  |
+| `String.append a b`  | O(\|a\|+\|b\|) | Simple `+`, new string allocation                    |
+| `String.concat list` | O(total)       | Uses JS `Array.join('')`                             |
+| `String.foldl f z s` | O(n)           | One Elm function call + `__Utils_chr` alloc per char |
+| `String.fromList cs` | O(n)           | List→Array→`.join('')`                               |
+| `String.toList s`    | O(n)           | `foldr (::) []`, builds linked list right-to-left    |
+| `Char.toCode c`      | O(1)           | `charCodeAt(0)`                                      |
+| `Char.fromCode n`    | O(1)           | `String.fromCharCode(n)`                             |
 
 ### Implications for a Hex-String-Backed Bytes Type
 
@@ -282,9 +306,9 @@ fromList = Elm.Kernel.String.fromList   -- kernel: toArray(chars).join('')
 
 ```javascript
 function _Bytes_encode(encoder) {
-    var mutableBytes = new DataView(new ArrayBuffer(__Encode_getWidth(encoder)));
-    __Encode_write(encoder)(mutableBytes)(0);
-    return mutableBytes;
+  var mutableBytes = new DataView(new ArrayBuffer(__Encode_getWidth(encoder)));
+  __Encode_write(encoder)(mutableBytes)(0);
+  return mutableBytes;
 }
 ```
 
@@ -297,25 +321,48 @@ function _Bytes_encode(encoder) {
 All writers take `(DataView, offset, value[, isLE])` and return the new offset:
 
 ```javascript
-var _Bytes_write_i8  = F3(function(mb, i, n) { mb.setInt8(i, n); return i + 1; });
-var _Bytes_write_u8  = F3(function(mb, i, n) { mb.setUint8(i, n); return i + 1; });
-var _Bytes_write_i16 = F4(function(mb, i, n, isLE) { mb.setInt16(i, n, isLE); return i + 2; });
-var _Bytes_write_u16 = F4(function(mb, i, n, isLE) { mb.setUint16(i, n, isLE); return i + 2; });
-var _Bytes_write_i32 = F4(function(mb, i, n, isLE) { mb.setInt32(i, n, isLE); return i + 4; });
-var _Bytes_write_u32 = F4(function(mb, i, n, isLE) { mb.setUint32(i, n, isLE); return i + 4; });
-var _Bytes_write_f32 = F4(function(mb, i, n, isLE) { mb.setFloat32(i, n, isLE); return i + 4; });
-var _Bytes_write_f64 = F4(function(mb, i, n, isLE) { mb.setFloat64(i, n, isLE); return i + 8; });
+var _Bytes_write_i8 = F3(function (mb, i, n) {
+  mb.setInt8(i, n);
+  return i + 1;
+});
+var _Bytes_write_u8 = F3(function (mb, i, n) {
+  mb.setUint8(i, n);
+  return i + 1;
+});
+var _Bytes_write_i16 = F4(function (mb, i, n, isLE) {
+  mb.setInt16(i, n, isLE);
+  return i + 2;
+});
+var _Bytes_write_u16 = F4(function (mb, i, n, isLE) {
+  mb.setUint16(i, n, isLE);
+  return i + 2;
+});
+var _Bytes_write_i32 = F4(function (mb, i, n, isLE) {
+  mb.setInt32(i, n, isLE);
+  return i + 4;
+});
+var _Bytes_write_u32 = F4(function (mb, i, n, isLE) {
+  mb.setUint32(i, n, isLE);
+  return i + 4;
+});
+var _Bytes_write_f32 = F4(function (mb, i, n, isLE) {
+  mb.setFloat32(i, n, isLE);
+  return i + 4;
+});
+var _Bytes_write_f64 = F4(function (mb, i, n, isLE) {
+  mb.setFloat64(i, n, isLE);
+  return i + 8;
+});
 ```
 
 ### Bytes Copy Optimization
 
 ```javascript
-var _Bytes_write_bytes = F3(function(mb, offset, bytes) {
-    for (var i = 0, len = bytes.byteLength, limit = len - 4; i <= limit; i += 4)
-        mb.setUint32(offset + i, bytes.getUint32(i));
-    for (; i < len; i++)
-        mb.setUint8(offset + i, bytes.getUint8(i));
-    return offset + len;
+var _Bytes_write_bytes = F3(function (mb, offset, bytes) {
+  for (var i = 0, len = bytes.byteLength, limit = len - 4; i <= limit; i += 4)
+    mb.setUint32(offset + i, bytes.getUint32(i));
+  for (; i < len; i++) mb.setUint8(offset + i, bytes.getUint8(i));
+  return offset + len;
 });
 ```
 
@@ -326,12 +373,18 @@ Copies 4 bytes at a time via `setUint32`, then handles the remainder byte-by-byt
 ```javascript
 // Width calculation: 1/2/3/4 bytes per code point
 function _Bytes_getStringWidth(string) {
-    for (var width = 0, i = 0; i < string.length; i++) {
-        var code = string.charCodeAt(i);
-        width += (code < 0x80) ? 1 : (code < 0x800) ? 2 :
-                 (code < 0xD800 || 0xDBFF < code) ? 3 : (i++, 4);
-    }
-    return width;
+  for (var width = 0, i = 0; i < string.length; i++) {
+    var code = string.charCodeAt(i);
+    width +=
+      code < 0x80
+        ? 1
+        : code < 0x800
+          ? 2
+          : code < 0xd800 || 0xdbff < code
+            ? 3
+            : (i++, 4);
+  }
+  return width;
 }
 ```
 
@@ -340,9 +393,12 @@ The write function encodes each code point as 1-4 UTF-8 bytes using `setUint8`/`
 ### Decode Flow
 
 ```javascript
-var _Bytes_decode = F2(function(decoder, bytes) {
-    try { return __Maybe_Just(A2(decoder, bytes, 0).b); }
-    catch(e) { return __Maybe_Nothing; }
+var _Bytes_decode = F2(function (decoder, bytes) {
+  try {
+    return __Maybe_Just(A2(decoder, bytes, 0).b);
+  } catch (e) {
+    return __Maybe_Nothing;
+  }
 });
 ```
 
@@ -444,16 +500,16 @@ The slow path skips to the current offset (via `Decode.bytes state.offset`), dec
 
 ### Combinators and Fast-Path Preservation
 
-| Combinator | Fast Path | Notes |
-|------------|-----------|-------|
-| `succeed`, `map`, `map2`–`map5` | Always | Composed via `Decode.map`, `Decode.map2`, etc. |
-| `keep`, `ignore`, `skip` | Conditional | Fast if both operands are fast |
-| `andThen` | Conditional | Fast if callback returns a decoder with a fast path |
-| `loop`, `repeat` | Conditional | `loop` uses `Decode.loop` (tight JS while loop); stays fast if callback returns fast decoders |
-| `fail` | Never | No value can be produced; forces slow path |
-| `oneOf` | Never | Requires backtracking, which `Bytes.Decode` cannot do |
-| `position`, `randomAccess` | Never | Offset tracking requires slow path state |
-| `inContext` | Preserved | Wraps error only on failure; fast path passed through unchanged |
+| Combinator                      | Fast Path   | Notes                                                                                         |
+| ------------------------------- | ----------- | --------------------------------------------------------------------------------------------- |
+| `succeed`, `map`, `map2`–`map5` | Always      | Composed via `Decode.map`, `Decode.map2`, etc.                                                |
+| `keep`, `ignore`, `skip`        | Conditional | Fast if both operands are fast                                                                |
+| `andThen`                       | Conditional | Fast if callback returns a decoder with a fast path                                           |
+| `loop`, `repeat`                | Conditional | `loop` uses `Decode.loop` (tight JS while loop); stays fast if callback returns fast decoders |
+| `fail`                          | Never       | No value can be produced; forces slow path                                                    |
+| `oneOf`                         | Never       | Requires backtracking, which `Bytes.Decode` cannot do                                         |
+| `position`, `randomAccess`      | Never       | Offset tracking requires slow path state                                                      |
+| `inContext`                     | Preserved   | Wraps error only on failure; fast path passed through unchanged                               |
 
 The `map2` implementation illustrates the pattern — compose fast paths when both exist, otherwise drop to slow:
 
@@ -525,30 +581,30 @@ Wraps a raw `Bytes.Decode.Decoder` with error reporting. The caller must provide
 
 Benchmarks from the package (48-byte applicative packet, 57-byte dynamic message):
 
-| Implementation | Applicative Packet | Dynamic Message |
-|----------------|-------------------|-----------------|
-| `elm/bytes` (baseline) | 822 ns/run | 509 ns/run |
-| `elm-cardano/bytes-decoder` | 869 ns/run (+5%) | 756 ns/run (+49%) |
-| `zwilias/elm-bytes-parser` | 3452 ns/run (+320%) | 2949 ns/run (+480%) |
+| Implementation              | Applicative Packet  | Dynamic Message     |
+| --------------------------- | ------------------- | ------------------- |
+| `elm/bytes` (baseline)      | 822 ns/run          | 509 ns/run          |
+| `elm-cardano/bytes-decoder` | 869 ns/run (+5%)    | 756 ns/run (+49%)   |
+| `zwilias/elm-bytes-parser`  | 3452 ns/run (+320%) | 2949 ns/run (+480%) |
 
 The +5% overhead for pure applicative decoding comes from the thin `Decoder` wrapper. The +49% for `andThen` + `loop` is higher because conditional fast-path checks add branching, but still well under alternatives.
 
 ### Comparison to elm/bytes and Alternatives
 
-| Feature | elm/bytes | elm-cardano/bytes-decoder | zwilias/elm-bytes-parser |
-|---------|-----------|---------------------------|--------------------------|
-| Sequential decode | Yes | Yes | Yes |
-| Applicative (map2–5) | Yes | Yes | Yes |
-| Monadic (andThen) | Yes | Yes | Yes |
-| Loop/repeat | Yes | Yes | Yes |
-| Backtracking (oneOf) | No | Yes | Yes |
-| Error reporting | `Maybe` (no info) | Rich ADT with offsets | Rich ADT with offsets |
-| Error context nesting | No | Yes | Yes |
-| Position tracking | No | Yes | Yes |
-| Random access | No | Yes | Yes |
-| Pipeline (keep/ignore) | No | Yes | Yes |
-| float16 support | No | Yes | No |
-| Happy path overhead | 0% | +5–50% | +300–480% |
+| Feature                | elm/bytes         | elm-cardano/bytes-decoder | zwilias/elm-bytes-parser |
+| ---------------------- | ----------------- | ------------------------- | ------------------------ |
+| Sequential decode      | Yes               | Yes                       | Yes                      |
+| Applicative (map2–5)   | Yes               | Yes                       | Yes                      |
+| Monadic (andThen)      | Yes               | Yes                       | Yes                      |
+| Loop/repeat            | Yes               | Yes                       | Yes                      |
+| Backtracking (oneOf)   | No                | Yes                       | Yes                      |
+| Error reporting        | `Maybe` (no info) | Rich ADT with offsets     | Rich ADT with offsets    |
+| Error context nesting  | No                | Yes                       | Yes                      |
+| Position tracking      | No                | Yes                       | Yes                      |
+| Random access          | No                | Yes                       | Yes                      |
+| Pipeline (keep/ignore) | No                | Yes                       | Yes                      |
+| float16 support        | No                | Yes                       | No                       |
+| Happy path overhead    | 0%                | +5–50%                    | +300–480%                |
 
 ### Implications for the CBOR Library
 
