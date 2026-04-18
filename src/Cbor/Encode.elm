@@ -894,70 +894,34 @@ canonicalCompare ( a, _ ) ( b, _ ) =
 
 compareBytes : Bytes.Bytes -> Bytes.Bytes -> Order
 compareBytes a b =
-    let
-        lenA : Int
-        lenA =
-            Bytes.width a
-
-        lenB : Int
-        lenB =
-            Bytes.width b
-
-        aList : List Int
-        aList =
-            bytesToList a
-
-        bList : List Int
-        bList =
-            bytesToList b
-    in
-    compareByteLists aList bList lenA lenB
+    compareBytesFrom 0 a b
 
 
-compareByteLists : List Int -> List Int -> Int -> Int -> Order
-compareByteLists a b lenA lenB =
-    case ( a, b ) of
-        ( [], [] ) ->
-            compare lenA lenB
-
-        ( x :: xs, y :: ys ) ->
+compareBytesFrom : Int -> Bytes.Bytes -> Bytes.Bytes -> Order
+compareBytesFrom i a b =
+    case ( byteAt i a, byteAt i b ) of
+        ( Just x, Just y ) ->
             case compare x y of
                 EQ ->
-                    compareByteLists xs ys lenA lenB
+                    compareBytesFrom (i + 1) a b
 
                 other ->
                     other
 
-        ( [], _ ) ->
-            LT
-
-        ( _, [] ) ->
+        ( Just _, Nothing ) ->
             GT
 
+        ( Nothing, Just _ ) ->
+            LT
 
-bytesToList : Bytes.Bytes -> List Int
-bytesToList bs =
-    let
-        len : Int
-        len =
-            Bytes.width bs
+        ( Nothing, Nothing ) ->
+            EQ
 
-        decoder : Bytes.Decode.Decoder (List Int)
-        decoder =
-            Bytes.Decode.loop ( len, [] )
-                (\( remaining, acc ) ->
-                    if remaining <= 0 then
-                        Bytes.Decode.succeed (Bytes.Decode.Done (List.reverse acc))
 
-                    else
-                        Bytes.Decode.unsignedInt8
-                            |> Bytes.Decode.map
-                                (\byte -> Bytes.Decode.Loop ( remaining - 1, byte :: acc ))
-                )
-    in
-    case Bytes.Decode.decode decoder bs of
-        Just result ->
-            result
-
-        Nothing ->
-            []
+byteAt : Int -> Bytes.Bytes -> Maybe Int
+byteAt offset bs =
+    Bytes.Decode.decode
+        (Bytes.Decode.bytes offset
+            |> Bytes.Decode.andThen (\_ -> Bytes.Decode.unsignedInt8)
+        )
+        bs
