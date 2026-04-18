@@ -19,7 +19,7 @@ encodeToHex encoder =
 
 {-| Helper: decode from hex using a given decoder.
 -}
-decodeFromHex : BD.Decoder ctx String a -> String -> Result (BD.Error ctx String) a
+decodeFromHex : BD.Decoder ctx CD.DecodeError a -> String -> Result (BD.Error ctx CD.DecodeError) a
 decodeFromHex decoder hex =
     BD.decode decoder (Hex.toBytesUnchecked hex)
 
@@ -750,7 +750,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.5, CE.float 2.5 ])
 
-                    decoder : BD.Decoder () String Point
+                    decoder : BD.Decoder () CD.DecodeError Point
                     decoder =
                         CD.record Point
                             |> CD.element CD.float
@@ -767,7 +767,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0, CE.float 2.0, CE.float 3.0 ])
 
-                    decoder : BD.Decoder () String Point3D
+                    decoder : BD.Decoder () CD.DecodeError Point3D
                     decoder =
                         CD.record Point3D
                             |> CD.element CD.float
@@ -785,7 +785,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0, CE.float 2.0 ])
 
-                    decoder : BD.Decoder () String Point3D
+                    decoder : BD.Decoder () CD.DecodeError Point3D
                     decoder =
                         CD.record Point3D
                             |> CD.element CD.float
@@ -803,7 +803,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0, CE.float 2.0, CE.float 3.0, CE.float 4.0 ])
 
-                    decoder : BD.Decoder () String Point
+                    decoder : BD.Decoder () CD.DecodeError Point
                     decoder =
                         CD.record Point
                             |> CD.element CD.float
@@ -820,7 +820,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0 ])
 
-                    decoder : BD.Decoder () String Point
+                    decoder : BD.Decoder () CD.DecodeError Point
                     decoder =
                         CD.record Point
                             |> CD.element CD.float
@@ -838,7 +838,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.string "localhost", CE.int 8080 ])
 
-                    decoder : BD.Decoder () String Config
+                    decoder : BD.Decoder () CD.DecodeError Config
                     decoder =
                         CD.record Config
                             |> CD.element CD.string
@@ -857,7 +857,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.string "localhost", CE.int 8080, CE.bool True ])
 
-                    decoder : BD.Decoder () String Config
+                    decoder : BD.Decoder () CD.DecodeError Config
                     decoder =
                         CD.record Config
                             |> CD.element CD.string
@@ -906,7 +906,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () String Person
+                    decoder : BD.Decoder () CD.DecodeError Person
                     decoder =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
@@ -928,7 +928,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () String PersonOptional
+                    decoder : BD.Decoder () CD.DecodeError PersonOptional
                     decoder =
                         CD.keyedRecord CD.int PersonOptional
                             |> CD.required 0 CD.string
@@ -950,7 +950,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () String PersonOptional
+                    decoder : BD.Decoder () CD.DecodeError PersonOptional
                     decoder =
                         CD.keyedRecord CD.int PersonOptional
                             |> CD.required 0 CD.string
@@ -973,7 +973,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () String PersonFull
+                    decoder : BD.Decoder () CD.DecodeError PersonFull
                     decoder =
                         CD.keyedRecord CD.int PersonFull
                             |> CD.required 0 CD.string
@@ -996,7 +996,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () String DetailedPerson
+                    decoder : BD.Decoder () CD.DecodeError DetailedPerson
                     decoder =
                         CD.keyedRecord CD.int DetailedPerson
                             |> CD.required 0 CD.string
@@ -1020,7 +1020,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () String Person
+                    decoder : BD.Decoder () CD.DecodeError Person
                     decoder =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
@@ -1041,7 +1041,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () String Person
+                    decoder : BD.Decoder () CD.DecodeError Person
                     decoder =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
@@ -1064,7 +1064,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () String PersonOptional
+                    decoder : BD.Decoder () CD.DecodeError PersonOptional
                     decoder =
                         CD.keyedRecord CD.int PersonOptional
                             |> CD.required 0 CD.string
@@ -1581,7 +1581,7 @@ foldEntriesTests =
         [ test "definite map sums values" <|
             \_ ->
                 let
-                    handler : Int -> Int -> BD.Decoder () String Int
+                    handler : Int -> Int -> BD.Decoder () CD.DecodeError Int
                     handler _ acc =
                         CD.int |> BD.map (\v -> acc + v)
                 in
@@ -1596,7 +1596,7 @@ foldEntriesTests =
         , test "indefinite map" <|
             \_ ->
                 let
-                    handler : Int -> Int -> BD.Decoder () String Int
+                    handler : Int -> Int -> BD.Decoder () CD.DecodeError Int
                     handler _ acc =
                         CD.int |> BD.map (\v -> acc + v)
                 in
@@ -1615,7 +1615,7 @@ foldEntriesTests =
                                 ]
                             )
 
-                    handler : Int -> Person -> BD.Decoder () String Person
+                    handler : Int -> Person -> BD.Decoder () CD.DecodeError Person
                     handler key acc =
                         case key of
                             0 ->

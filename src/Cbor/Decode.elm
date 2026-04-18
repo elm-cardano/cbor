@@ -1,5 +1,6 @@
 module Cbor.Decode exposing
-    ( int, bigInt, float, bool, null, string, bytes
+    ( DecodeError (..), errorToString
+    , int, bigInt, float, bool, null, string, bytes
     , array, keyValue, field, foldEntries, tag
     , RecordBuilder, record, element, optionalElement, buildRecord
     , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
@@ -18,7 +19,7 @@ values — use `Bytes.Decoder.decode` to run them.
     type alias Person =
         { name : String, age : Int }
 
-    decodePerson : BD.Decoder ctx String Person
+    decodePerson : BD.Decoder ctx CD.DecodeError Person
     decodePerson =
         CD.keyedRecord CD.int Person
             |> CD.required 0 CD.string
@@ -29,6 +30,7 @@ Composition combinators (`succeed`, `fail`, `andThen`, `oneOf`, `map`,
 `map2`–`map5`, `keep`, `ignore`, `loop`, `repeat`, `inContext`) come from
 `Bytes.Decoder` directly.
 
+@docs DecodeError, errorToString
 @docs int, bigInt, float, bool, null, string, bytes
 
 
@@ -66,6 +68,58 @@ import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Si
 
 
 
+{-| Structured error type for CBOR decoding failures.
+-}
+type DecodeError
+    = WrongMajorType { expected : Int, got : Int }
+    | WrongInitialByte { got : Int }
+    | WrongTag { expected : Int, got : Int }
+    | ReservedAdditionalInfo Int
+    | IntegerOverflow
+    | KeyMismatch
+    | TooFewElements
+    | UnexpectedPendingKey
+    | IndefiniteLengthNotSupported
+    | UnknownMajorType Int
+
+
+{-| Convert a `DecodeError` to a human-readable string.
+-}
+errorToString : DecodeError -> String
+errorToString err =
+    case err of
+        WrongMajorType { expected, got } ->
+            "Expected major type " ++ String.fromInt expected ++ " but got " ++ String.fromInt got
+
+        WrongInitialByte { got } ->
+            "Unexpected initial byte: 0x" ++ intToHex got
+
+        WrongTag { expected, got } ->
+            "Expected tag " ++ String.fromInt expected ++ " but got " ++ String.fromInt got
+
+        ReservedAdditionalInfo ai ->
+            "Reserved additional info: " ++ String.fromInt ai
+
+        IntegerOverflow ->
+            "Integer value exceeds safe range (2^52)"
+
+        KeyMismatch ->
+            "Map key mismatch"
+
+        TooFewElements ->
+            "Array has fewer elements than expected"
+
+        UnexpectedPendingKey ->
+            "Unexpected pending key at end of keyed record"
+
+        IndefiniteLengthNotSupported ->
+            "Indefinite-length encoding not supported in record builder"
+
+        UnknownMajorType mt ->
+            "Unknown major type: " ++ String.fromInt mt
+
+
+
 -- INTERNAL HELPERS
 
 
@@ -92,7 +146,7 @@ u32 =
 
 {-| Decode the CBOR argument from the additional info (low 5 bits).
 -}
-decodeArgument : Int -> BD.Decoder ctx String Int
+decodeArgument : Int -> BD.Decoder ctx DecodeError Int
 decodeArgument additionalInfo =
     if additionalInfo <= 23 then
         BD.succeed additionalInfo
@@ -110,12 +164,12 @@ decodeArgument additionalInfo =
         BD.map2 (\hi lo -> hi * 0x0000000100000000 + lo) u32 u32
 
     else
-        BD.fail ("Reserved additional info: " ++ String.fromInt additionalInfo)
+        BD.fail (ReservedAdditionalInfo additionalInfo)
 
 
 {-| Decode the CBOR argument, returning the width and value.
 -}
-decodeArgument64 : Int -> BD.Decoder ctx String ( IntWidth, Int )
+decodeArgument64 : Int -> BD.Decoder ctx DecodeError ( IntWidth, Int )
 decodeArgument64 additionalInfo =
     if additionalInfo <= 23 then
         BD.succeed ( IW0, additionalInfo )
@@ -133,10 +187,10 @@ decodeArgument64 additionalInfo =
         BD.map2 (\hi lo -> ( IW64, hi * 0x0000000100000000 + lo )) u32 u32
 
     else
-        BD.fail ("Reserved additional info: " ++ String.fromInt additionalInfo)
+        BD.fail (ReservedAdditionalInfo additionalInfo)
 
 
-decodeArgumentBytes : Int -> BD.Decoder ctx String Bytes.Bytes
+decodeArgumentBytes : Int -> BD.Decoder ctx DecodeError Bytes.Bytes
 decodeArgumentBytes additionalInfo =
     if additionalInfo <= 23 then
         BD.succeed (encodeSingleByte additionalInfo)
@@ -154,7 +208,7 @@ decodeArgumentBytes additionalInfo =
         BD.bytes 8
 
     else
-        BD.fail ("Reserved additional info: " ++ String.fromInt additionalInfo)
+        BD.fail (ReservedAdditionalInfo additionalInfo)
 
 
 encodeSingleByte : Int -> Bytes.Bytes
@@ -188,7 +242,7 @@ maxSafeInt =
 Fails if the absolute value exceeds 2^52. For larger values, use `bigInt`.
 
 -}
-int : BD.Decoder ctx String Int
+int : BD.Decoder ctx DecodeError Int
 int =
     u8
         |> BD.andThen
@@ -207,7 +261,7 @@ int =
                         |> BD.andThen
                             (\n ->
                                 if n > maxSafeInt then
-                                    BD.fail "Integer value exceeds safe range (2^52)"
+                                    BD.fail IntegerOverflow
 
                                 else
                                     BD.succeed n
@@ -218,14 +272,14 @@ int =
                         |> BD.andThen
                             (\n ->
                                 if n > maxSafeInt then
-                                    BD.fail "Integer value exceeds safe range (2^52)"
+                                    BD.fail IntegerOverflow
 
                                 else
                                     BD.succeed (-1 - n)
                             )
 
                 else
-                    BD.fail ("Expected integer (major type 0 or 1) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 0, got = majorType })
             )
 
 
@@ -235,7 +289,7 @@ Returns `( Sign, Bytes )` where `Bytes` is the minimal big-endian
 representation of the unsigned argument.
 
 -}
-bigInt : BD.Decoder ctx String ( Sign, Bytes.Bytes )
+bigInt : BD.Decoder ctx DecodeError ( Sign, Bytes.Bytes )
 bigInt =
     u8
         |> BD.andThen
@@ -270,17 +324,17 @@ bigInt =
                                         |> BD.map (\bs -> ( Negative, bs ))
 
                                 else
-                                    BD.fail ("Expected bignum tag (2 or 3) but got tag " ++ String.fromInt tagNum)
+                                    BD.fail (WrongTag { expected = 2, got = tagNum })
                             )
 
                 else
-                    BD.fail ("Expected integer or bignum but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 0, got = majorType })
             )
 
 
 {-| Decode a CBOR float (major type 7, additional info 25/26/27).
 -}
-float : BD.Decoder ctx String Float
+float : BD.Decoder ctx DecodeError Float
 float =
     u8
         |> BD.andThen
@@ -291,7 +345,7 @@ float =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
                 if majorType /= 7 then
-                    BD.fail ("Expected float (major type 7) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 7, got = majorType })
 
                 else
                     let
@@ -309,13 +363,13 @@ float =
                         BD.float64 Bytes.BE
 
                     else
-                        BD.fail ("Expected float (additional info 25/26/27) but got " ++ String.fromInt additionalInfo)
+                        BD.fail (WrongInitialByte { got = initialByte })
             )
 
 
 {-| Decode a CBOR boolean (0xF4 for false, 0xF5 for true).
 -}
-bool : BD.Decoder ctx String Bool
+bool : BD.Decoder ctx DecodeError Bool
 bool =
     u8
         |> BD.andThen
@@ -327,13 +381,13 @@ bool =
                     BD.succeed True
 
                 else
-                    BD.fail ("Expected boolean (0xF4 or 0xF5) but got 0x" ++ intToHex byte)
+                    BD.fail (WrongInitialByte { got = byte })
             )
 
 
 {-| Decode a CBOR null (0xF6), returning the provided default value.
 -}
-null : a -> BD.Decoder ctx String a
+null : a -> BD.Decoder ctx DecodeError a
 null default =
     u8
         |> BD.andThen
@@ -342,7 +396,7 @@ null default =
                     BD.succeed default
 
                 else
-                    BD.fail ("Expected null (0xF6) but got 0x" ++ intToHex byte)
+                    BD.fail (WrongInitialByte { got = byte })
             )
 
 
@@ -351,7 +405,7 @@ null default =
 Concatenates indefinite-length chunks transparently.
 
 -}
-string : BD.Decoder ctx String String
+string : BD.Decoder ctx DecodeError String
 string =
     u8
         |> BD.andThen
@@ -362,7 +416,7 @@ string =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
                 if majorType /= 3 then
-                    BD.fail ("Expected text string (major type 3) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 3, got = majorType })
 
                 else
                     let
@@ -403,7 +457,7 @@ string =
 Concatenates indefinite-length chunks transparently.
 
 -}
-bytes : BD.Decoder ctx String Bytes.Bytes
+bytes : BD.Decoder ctx DecodeError Bytes.Bytes
 bytes =
     u8
         |> BD.andThen
@@ -414,7 +468,7 @@ bytes =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
                 if majorType /= 2 then
-                    BD.fail ("Expected byte string (major type 2) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 2, got = majorType })
 
                 else
                     let
@@ -450,7 +504,7 @@ bytes =
             )
 
 
-decodeBytesRaw : BD.Decoder ctx String Bytes.Bytes
+decodeBytesRaw : BD.Decoder ctx DecodeError Bytes.Bytes
 decodeBytesRaw =
     u8
         |> BD.andThen
@@ -461,7 +515,7 @@ decodeBytesRaw =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
                 if majorType /= 2 then
-                    BD.fail ("Expected byte string (major type 2) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 2, got = majorType })
 
                 else
                     let
@@ -483,7 +537,7 @@ decodeBytesRaw =
 Handles both definite and indefinite-length arrays.
 
 -}
-array : BD.Decoder ctx String a -> BD.Decoder ctx String (List a)
+array : BD.Decoder ctx DecodeError a -> BD.Decoder ctx DecodeError (List a)
 array elementDecoder =
     u8
         |> BD.andThen
@@ -494,7 +548,7 @@ array elementDecoder =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
                 if majorType /= 4 then
-                    BD.fail ("Expected array (major type 4) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 4, got = majorType })
 
                 else
                     let
@@ -523,7 +577,7 @@ array elementDecoder =
 Handles both definite and indefinite-length maps.
 
 -}
-keyValue : BD.Decoder ctx String k -> BD.Decoder ctx String v -> BD.Decoder ctx String (List ( k, v ))
+keyValue : BD.Decoder ctx DecodeError k -> BD.Decoder ctx DecodeError v -> BD.Decoder ctx DecodeError (List ( k, v ))
 keyValue keyDecoder valueDecoder =
     u8
         |> BD.andThen
@@ -534,7 +588,7 @@ keyValue keyDecoder valueDecoder =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
                 if majorType /= 5 then
-                    BD.fail ("Expected map (major type 5) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 5, got = majorType })
 
                 else
                     let
@@ -568,7 +622,7 @@ Reads the key, compares via `==`, then decodes the value on match.
 Fails on mismatch.
 
 -}
-field : k -> BD.Decoder ctx String k -> BD.Decoder ctx String v -> BD.Decoder ctx String v
+field : k -> BD.Decoder ctx DecodeError k -> BD.Decoder ctx DecodeError v -> BD.Decoder ctx DecodeError v
 field expectedKey keyDecoder valueDecoder =
     keyDecoder
         |> BD.andThen
@@ -577,7 +631,7 @@ field expectedKey keyDecoder valueDecoder =
                     valueDecoder
 
                 else
-                    BD.fail "Map key mismatch"
+                    BD.fail KeyMismatch
             )
 
 
@@ -591,10 +645,10 @@ decodes the value and returns the updated accumulator.
 
 -}
 foldEntries :
-    BD.Decoder ctx String k
-    -> (k -> acc -> BD.Decoder ctx String acc)
+    BD.Decoder ctx DecodeError k
+    -> (k -> acc -> BD.Decoder ctx DecodeError acc)
     -> acc
-    -> BD.Decoder ctx String acc
+    -> BD.Decoder ctx DecodeError acc
 foldEntries keyDecoder handler initialAcc =
     u8
         |> BD.andThen
@@ -605,7 +659,7 @@ foldEntries keyDecoder handler initialAcc =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
                 if majorType /= 5 then
-                    BD.fail ("Expected map (major type 5) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 5, got = majorType })
 
                 else
                     let
@@ -649,7 +703,7 @@ foldEntries keyDecoder handler initialAcc =
 Expects a specific tag, then decodes the enclosed item.
 
 -}
-tag : Tag -> BD.Decoder ctx String a -> BD.Decoder ctx String a
+tag : Tag -> BD.Decoder ctx DecodeError a -> BD.Decoder ctx DecodeError a
 tag expectedTag innerDecoder =
     u8
         |> BD.andThen
@@ -660,7 +714,7 @@ tag expectedTag innerDecoder =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
                 if majorType /= 6 then
-                    BD.fail ("Expected tag (major type 6) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 6, got = majorType })
 
                 else
                     let
@@ -675,7 +729,7 @@ tag expectedTag innerDecoder =
                                     innerDecoder
 
                                 else
-                                    BD.fail ("Expected tag " ++ String.fromInt (tagToInt expectedTag) ++ " but got " ++ String.fromInt tagNum)
+                                    BD.fail (WrongTag { expected = tagToInt expectedTag, got = tagNum })
                             )
             )
 
@@ -687,7 +741,7 @@ tag expectedTag innerDecoder =
 {-| Decode a CBOR array header, returning the count or `Nothing` for
 indefinite-length.
 -}
-arrayHeader : BD.Decoder ctx String (Maybe Int)
+arrayHeader : BD.Decoder ctx DecodeError (Maybe Int)
 arrayHeader =
     u8
         |> BD.andThen
@@ -698,7 +752,7 @@ arrayHeader =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
                 if majorType /= 4 then
-                    BD.fail ("Expected array (major type 4) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 4, got = majorType })
 
                 else
                     let
@@ -718,7 +772,7 @@ arrayHeader =
 {-| Decode a CBOR map header, returning the entry count or `Nothing` for
 indefinite-length.
 -}
-mapHeader : BD.Decoder ctx String (Maybe Int)
+mapHeader : BD.Decoder ctx DecodeError (Maybe Int)
 mapHeader =
     u8
         |> BD.andThen
@@ -729,7 +783,7 @@ mapHeader =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
                 if majorType /= 5 then
-                    BD.fail ("Expected map (major type 5) but got major type " ++ String.fromInt majorType)
+                    BD.fail (WrongMajorType { expected = 5, got = majorType })
 
                 else
                     let
@@ -753,7 +807,7 @@ mapHeader =
 {-| Opaque builder for decoding CBOR arrays into Elm values.
 -}
 type RecordBuilder ctx a
-    = RecordBuilder (Int -> BD.Decoder ctx String ( Int, a ))
+    = RecordBuilder (Int -> BD.Decoder ctx DecodeError ( Int, a ))
 
 
 {-| Start building a record decoder with the constructor function.
@@ -771,7 +825,7 @@ record constructor =
 
 {-| Decode one array element, applying it to the constructor.
 -}
-element : BD.Decoder ctx String v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
+element : BD.Decoder ctx DecodeError v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
 element valueDecoder (RecordBuilder innerDecoder) =
     RecordBuilder
         (\remaining ->
@@ -783,7 +837,7 @@ element valueDecoder (RecordBuilder innerDecoder) =
                                 |> BD.map (\v -> ( rem - 1, f v ))
 
                         else
-                            BD.fail "Array has fewer elements than expected"
+                            BD.fail TooFewElements
                     )
         )
 
@@ -793,7 +847,7 @@ element valueDecoder (RecordBuilder innerDecoder) =
 Optional elements must be at the end of the array.
 
 -}
-optionalElement : BD.Decoder ctx String v -> v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
+optionalElement : BD.Decoder ctx DecodeError v -> v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
 optionalElement valueDecoder default (RecordBuilder innerDecoder) =
     RecordBuilder
         (\remaining ->
@@ -816,7 +870,7 @@ Reads the array header, runs the builder pipeline, and verifies all
 elements were consumed.
 
 -}
-buildRecord : RecordBuilder ctx a -> BD.Decoder ctx String a
+buildRecord : RecordBuilder ctx a -> BD.Decoder ctx DecodeError a
 buildRecord (RecordBuilder decoder) =
     arrayHeader
         |> BD.andThen
@@ -835,7 +889,7 @@ buildRecord (RecordBuilder decoder) =
                                 )
 
                     Nothing ->
-                        BD.fail "Indefinite-length arrays in record builder not yet supported"
+                        BD.fail IndefiniteLengthNotSupported
             )
 
 
@@ -846,7 +900,7 @@ buildRecord (RecordBuilder decoder) =
 {-| Opaque builder for decoding CBOR maps into Elm values.
 -}
 type KeyedRecordBuilder ctx k a
-    = KeyedRecordBuilder (BD.Decoder ctx String k) (Int -> BD.Decoder ctx String (KeyedState k a))
+    = KeyedRecordBuilder (BD.Decoder ctx DecodeError k) (Int -> BD.Decoder ctx DecodeError (KeyedState k a))
 
 
 type alias KeyedState k a =
@@ -864,7 +918,7 @@ type alias KeyedState k a =
         |> buildKeyedRecord
 
 -}
-keyedRecord : BD.Decoder ctx String k -> a -> KeyedRecordBuilder ctx k a
+keyedRecord : BD.Decoder ctx DecodeError k -> a -> KeyedRecordBuilder ctx k a
 keyedRecord keyDecoder constructor =
     KeyedRecordBuilder keyDecoder
         (\remaining ->
@@ -881,7 +935,7 @@ keyedRecord keyDecoder constructor =
 The key order in the builder must match the key order in the CBOR data.
 
 -}
-required : k -> BD.Decoder ctx String v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
+required : k -> BD.Decoder ctx DecodeError v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
 required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
     KeyedRecordBuilder keyDecoder
         (\remaining ->
@@ -908,7 +962,7 @@ required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
                                                 )
 
                                     else
-                                        BD.fail "Map key mismatch in required field"
+                                        BD.fail KeyMismatch
                                 )
                     )
         )
@@ -920,7 +974,7 @@ If the next key doesn't match, the key is stashed for the next step
 and the default value is used.
 
 -}
-optional : k -> BD.Decoder ctx String v -> v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
+optional : k -> BD.Decoder ctx DecodeError v -> v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
 optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDecoder) =
     KeyedRecordBuilder keyDecoder
         (\remaining ->
@@ -971,7 +1025,7 @@ Reads the map header, runs the builder pipeline, and verifies all
 entries were consumed.
 
 -}
-buildKeyedRecord : KeyedRecordBuilder ctx k a -> BD.Decoder ctx String a
+buildKeyedRecord : KeyedRecordBuilder ctx k a -> BD.Decoder ctx DecodeError a
 buildKeyedRecord (KeyedRecordBuilder _ decoder) =
     mapHeader
         |> BD.andThen
@@ -989,11 +1043,11 @@ buildKeyedRecord (KeyedRecordBuilder _ decoder) =
                                             |> BD.map (\_ -> state.value)
 
                                     else
-                                        BD.fail "Unexpected pending key at end of keyed record"
+                                        BD.fail UnexpectedPendingKey
                                 )
 
                     Nothing ->
-                        BD.fail "Indefinite-length maps in keyed record builder not yet supported"
+                        BD.fail IndefiniteLengthNotSupported
             )
 
 
@@ -1007,13 +1061,13 @@ This is the full CBOR parser. Handles all major types, nested structures,
 tags, indefinite-length containers, etc.
 
 -}
-item : BD.Decoder ctx String CborItem
+item : BD.Decoder ctx DecodeError CborItem
 item =
     u8
         |> BD.andThen decodeItemBody
 
 
-decodeItemBody : Int -> BD.Decoder ctx String CborItem
+decodeItemBody : Int -> BD.Decoder ctx DecodeError CborItem
 decodeItemBody initialByte =
     let
         majorType : Int
@@ -1230,10 +1284,10 @@ decodeItemBody initialByte =
                 BD.float64 Bytes.BE |> BD.map (CborFloat FW64)
 
             else
-                BD.fail ("Reserved additional info: " ++ String.fromInt additionalInfo)
+                BD.fail (ReservedAdditionalInfo additionalInfo)
 
         _ ->
-            BD.fail ("Unknown major type: " ++ String.fromInt majorType)
+            BD.fail (UnknownMajorType majorType)
 
 
 
@@ -1242,7 +1296,7 @@ decodeItemBody initialByte =
 
 {-| Decode a break code (0xFF). Used in oneOf for indefinite-length containers.
 -}
-breakCode : BD.Decoder ctx String ()
+breakCode : BD.Decoder ctx DecodeError ()
 breakCode =
     u8
         |> BD.andThen
@@ -1251,7 +1305,7 @@ breakCode =
                     BD.succeed ()
 
                 else
-                    BD.fail "Expected break code (0xFF)"
+                    BD.fail (WrongInitialByte { got = byte })
             )
 
 
@@ -1261,7 +1315,7 @@ concatBytes chunks =
         (Bytes.Encode.sequence (List.map Bytes.Encode.bytes chunks))
 
 
-skipItems : Int -> BD.Decoder ctx String ()
+skipItems : Int -> BD.Decoder ctx DecodeError ()
 skipItems count =
     BD.loop
         (\remaining ->
@@ -1274,7 +1328,7 @@ skipItems count =
         count
 
 
-skipEntries : Int -> BD.Decoder ctx String ()
+skipEntries : Int -> BD.Decoder ctx DecodeError ()
 skipEntries count =
     skipItems (count * 2)
 

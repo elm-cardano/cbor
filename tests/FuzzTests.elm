@@ -291,7 +291,7 @@ lengthEquivalenceProperties =
                     encoder =
                         CE.list CE.int xs
 
-                    decoder : BD.Decoder ctx String (List Int)
+                    decoder : BD.Decoder ctx CD.DecodeError (List Int)
                     decoder =
                         CD.array CD.int
                 in
@@ -309,7 +309,7 @@ lengthEquivalenceProperties =
                     encoder =
                         CE.map (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique)
 
-                    decoder : BD.Decoder ctx String (List ( Int, Int ))
+                    decoder : BD.Decoder ctx CD.DecodeError (List ( Int, Int ))
                     decoder =
                         CD.keyValue CD.int CD.int
 
@@ -355,7 +355,7 @@ strategyProperties =
                     encoder =
                         CE.map (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique)
 
-                    decoder : BD.Decoder ctx String (List ( Int, Int ))
+                    decoder : BD.Decoder ctx CD.DecodeError (List ( Int, Int ))
                     decoder =
                         CD.keyValue CD.int CD.int
 
@@ -363,15 +363,15 @@ strategyProperties =
                     sortResult =
                         Result.map (List.sortBy Tuple.first)
 
-                    detResult : Result (BD.Error ctx String) (List ( Int, Int ))
+                    detResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
                     detResult =
                         sortResult (BD.decode decoder (CE.encode CE.deterministic encoder))
 
-                    canResult : Result (BD.Error ctx String) (List ( Int, Int ))
+                    canResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
                     canResult =
                         sortResult (BD.decode decoder (CE.encode CE.canonical encoder))
 
-                    unsResult : Result (BD.Error ctx String) (List ( Int, Int ))
+                    unsResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
                     unsResult =
                         sortResult (BD.decode decoder (CE.encode CE.unsorted encoder))
                 in
