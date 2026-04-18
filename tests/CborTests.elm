@@ -1338,6 +1338,46 @@ itemDecoderTests =
                         (CE.item (CborInt64 Negative (Hex.toBytesUnchecked "000000000000002a")))
                     )
                     |> Expect.equal "3b000000000000002a"
+        , test "64-bit value > 2^52 decodes as CborInt64 Positive" <|
+            \_ ->
+                -- 0x0010000000000001 = 2^52 + 1
+                case decodeFromHex CD.item "1b0010000000000001" of
+                    Ok (CborInt64 Positive bs) ->
+                        Hex.fromBytes bs |> Expect.equal "0010000000000001"
+
+                    other ->
+                        Expect.fail ("Expected CborInt64 Positive, got " ++ Debug.toString other)
+        , test "negative 64-bit value > 2^52 decodes as CborInt64 Negative" <|
+            \_ ->
+                -- argument = 0x0010000000000001 = 2^52 + 1
+                case decodeFromHex CD.item "3b0010000000000001" of
+                    Ok (CborInt64 Negative bs) ->
+                        Hex.fromBytes bs |> Expect.equal "0010000000000001"
+
+                    other ->
+                        Expect.fail ("Expected CborInt64 Negative, got " ++ Debug.toString other)
+        , test "64-bit value at exactly 2^52 stays CborInt52" <|
+            \_ ->
+                -- 0x0010000000000000 = 2^52 = maxSafeInt
+                case decodeFromHex CD.item "1b0010000000000000" of
+                    Ok (CborInt52 IW64 n) ->
+                        Expect.equal 4503599627370496 n
+
+                    other ->
+                        Expect.fail ("Expected CborInt52 IW64, got " ++ Debug.toString other)
+        , test "CborInt64 round-trip via item" <|
+            \_ ->
+                let
+                    hex =
+                        "1b0010000000000001"
+                in
+                case decodeFromHex CD.item hex of
+                    Ok cborItem ->
+                        Hex.fromBytes (CE.encode CE.deterministic (CE.item cborItem))
+                            |> Expect.equal hex
+
+                    Err err ->
+                        Expect.fail ("decode failed: " ++ Debug.toString err)
         ]
 
 

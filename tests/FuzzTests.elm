@@ -159,6 +159,52 @@ byteLevelRoundTripProperties =
             \s -> byteRoundTrip (CE.string s)
         , fuzz smallBytes "bytes preserves bytes" <|
             \bs -> byteRoundTrip (CE.bytes bs)
+        , fuzz2 (Fuzz.intRange 1048577 2147483647)
+            (Fuzz.intRange 0 2147483647)
+            "CborInt64 positive round-trips via item"
+          <|
+            \hi lo ->
+                let
+                    argBytes =
+                        BE.encode
+                            (BE.sequence
+                                [ BE.unsignedInt32 Bytes.BE hi
+                                , BE.unsignedInt32 Bytes.BE lo
+                                ]
+                            )
+
+                    encoded =
+                        CE.encode CE.deterministic (CE.item (CborInt64 Positive argBytes))
+                in
+                case BD.decode CD.item encoded of
+                    Ok (CborInt64 Positive bs) ->
+                        Hex.fromBytes bs |> Expect.equal (Hex.fromBytes argBytes)
+
+                    other ->
+                        Expect.fail ("Expected CborInt64 Positive, got " ++ Debug.toString other)
+        , fuzz2 (Fuzz.intRange 1048577 2147483647)
+            (Fuzz.intRange 0 2147483647)
+            "CborInt64 negative round-trips via item"
+          <|
+            \hi lo ->
+                let
+                    argBytes =
+                        BE.encode
+                            (BE.sequence
+                                [ BE.unsignedInt32 Bytes.BE hi
+                                , BE.unsignedInt32 Bytes.BE lo
+                                ]
+                            )
+
+                    encoded =
+                        CE.encode CE.deterministic (CE.item (CborInt64 Negative argBytes))
+                in
+                case BD.decode CD.item encoded of
+                    Ok (CborInt64 Negative bs) ->
+                        Hex.fromBytes bs |> Expect.equal (Hex.fromBytes argBytes)
+
+                    other ->
+                        Expect.fail ("Expected CborInt64 Negative, got " ++ Debug.toString other)
         ]
 
 

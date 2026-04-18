@@ -162,6 +162,16 @@ encodeSingleByte n =
     Bytes.Encode.encode (Bytes.Encode.unsignedInt8 n)
 
 
+intPairToBytes : Int -> Int -> Bytes.Bytes
+intPairToBytes hi lo =
+    Bytes.Encode.encode
+        (Bytes.Encode.sequence
+            [ Bytes.Encode.unsignedInt32 Bytes.BE hi
+            , Bytes.Encode.unsignedInt32 Bytes.BE lo
+            ]
+        )
+
+
 {-| Maximum safe integer value for Elm (2^52).
 -}
 maxSafeInt : Int
@@ -971,13 +981,47 @@ decodeItemBody initialByte =
     case majorType of
         0 ->
             -- Unsigned integer
-            decodeArgument64 additionalInfo
-                |> BD.map (\( width, n ) -> CborInt52 width n)
+            if additionalInfo == 27 then
+                BD.map2
+                    (\hi lo ->
+                        let
+                            n =
+                                hi * 0x0000000100000000 + lo
+                        in
+                        if n > maxSafeInt then
+                            CborInt64 Positive (intPairToBytes hi lo)
+
+                        else
+                            CborInt52 IW64 n
+                    )
+                    u32
+                    u32
+
+            else
+                decodeArgument64 additionalInfo
+                    |> BD.map (\( width, n ) -> CborInt52 width n)
 
         1 ->
             -- Negative integer
-            decodeArgument64 additionalInfo
-                |> BD.map (\( width, n ) -> CborInt52 width (-1 - n))
+            if additionalInfo == 27 then
+                BD.map2
+                    (\hi lo ->
+                        let
+                            n =
+                                hi * 0x0000000100000000 + lo
+                        in
+                        if n > maxSafeInt then
+                            CborInt64 Negative (intPairToBytes hi lo)
+
+                        else
+                            CborInt52 IW64 (-1 - n)
+                    )
+                    u32
+                    u32
+
+            else
+                decodeArgument64 additionalInfo
+                    |> BD.map (\( width, n ) -> CborInt52 width (-1 - n))
 
         2 ->
             -- Byte string
