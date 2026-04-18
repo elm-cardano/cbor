@@ -135,6 +135,37 @@ V1 always runs the float16 round-trip check. V2 skips it when
 elm-bench -f BenchOptimize.enc_guard_v1 -f BenchOptimize.enc_guard_v2 "()"
 ```
 
+### 14. Int decoder — safeArgument (merged overflow check)
+
+V1 uses `decodeArgument |> andThen (overflow check)` — two `andThen` levels.
+V2 uses `safeArgument` which merges the overflow check into the argument
+decoder. For inline/u8/u16/u32 values, no overflow check needed.
+
+```sh
+elm-bench -f BenchOptimize.dec_int_v1 -f BenchOptimize.dec_int_v2 "()"
+```
+
+### 15. String decoder — withArgument (fused continuation)
+
+V1 uses `decodeArgument |> andThen (\len -> BD.string len)` — for inline
+lengths, builds `BD.succeed len` then immediately unwraps it.
+V2 uses `withArgument` which calls the continuation directly.
+
+```sh
+elm-bench -f BenchOptimize.dec_string_v1 -f BenchOptimize.dec_string_v2 "()"
+```
+
+### 16. Item decoder — withArgument + BD.repeat
+
+V1 uses `decodeArgument |> andThen` + manual `BD.loop` with tuple state
+for definite-length collections.
+V2 uses `withArgument` + `BD.repeat` (optimized kernel path).
+
+```sh
+elm-bench -f BenchOptimize.dec_item_array_v1 -f BenchOptimize.dec_item_array_v2 "()"
+elm-bench -f BenchOptimize.dec_item_map_v1 -f BenchOptimize.dec_item_map_v2 "()"
+```
+
 
 ## Optimization results
 
