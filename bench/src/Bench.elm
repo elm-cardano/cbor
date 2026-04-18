@@ -249,6 +249,26 @@ itemFromBytes bs =
         |> Result.withDefault CborNull
 
 
+itemToListInt : CborItem -> Maybe (List Int)
+itemToListInt cborItem =
+    case cborItem of
+        CborArray _ items ->
+            items
+                |> List.foldr
+                    (\item acc ->
+                        case ( item, acc ) of
+                            ( CborInt52 _ n, Just list ) ->
+                                Just (n :: list)
+
+                            _ ->
+                                Nothing
+                    )
+                    (Just [])
+
+        _ ->
+            Nothing
+
+
 
 -- Float value lists
 -- float16: small integers (0-999), all exact in float16
@@ -578,9 +598,11 @@ dec_direct_array100 () =
     BD.decode (CD.array CD.int) array100Data |> Result.toMaybe
 
 
-dec_item_array100 : () -> Maybe CborItem
+dec_item_array100 : () -> Maybe (List Int)
 dec_item_array100 () =
-    BD.decode CD.item array100Data |> Result.toMaybe
+    BD.decode CD.item array100Data
+        |> Result.toMaybe
+        |> Maybe.andThen itemToListInt
 
 
 enc_direct_list100 : () -> Bytes
@@ -701,9 +723,11 @@ dec_record_30_array () =
     BD.decode (CD.array CD.int) record30Data |> Result.toMaybe
 
 
-dec_keyed_3_builder : () -> Maybe R3
+dec_keyed_3_builder : () -> Maybe (List ( Int, Int ))
 dec_keyed_3_builder () =
-    BD.decode decKR3Builder keyedRecord3Data |> Result.toMaybe
+    BD.decode decKR3Builder keyedRecord3Data
+        |> Result.toMaybe
+        |> Maybe.map (\r -> [ ( 0, r.a ), ( 1, r.b ), ( 2, r.c ) ])
 
 
 dec_keyed_3_fold : () -> Maybe (List ( Int, Int ))
@@ -711,9 +735,11 @@ dec_keyed_3_fold () =
     BD.decode decFold keyedRecord3Data |> Result.toMaybe
 
 
-dec_keyed_10_builder : () -> Maybe R10
+dec_keyed_10_builder : () -> Maybe (List ( Int, Int ))
 dec_keyed_10_builder () =
-    BD.decode decKR10Builder keyedRecord10Data |> Result.toMaybe
+    BD.decode decKR10Builder keyedRecord10Data
+        |> Result.toMaybe
+        |> Maybe.map (\r -> [ ( 0, r.a ), ( 1, r.b ), ( 2, r.c ), ( 3, r.d ), ( 4, r.e ), ( 5, r.f ), ( 6, r.g ), ( 7, r.h ), ( 8, r.i ), ( 9, r.j ) ])
 
 
 dec_keyed_10_fold : () -> Maybe (List ( Int, Int ))
