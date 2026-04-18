@@ -20,19 +20,70 @@ approach lifts this pattern to the type level.
 
 ## Benchmark results
 
-Body decoders are ~3x faster for indefinite-length collections.
-Definite-length performance is unchanged (both use `BD.repeat`).
+Full Item/Pure implementation (`DecodeItemPure.elm`) vs current `Cbor.Decode`.
+
+### Indefinite-length collections
 
 ```
-dec_def_array_current     ████████████████████   13420 ns/run   baseline
-dec_def_array_body        ████████████████████   13500 ns/run   ~same
+indef_array_100    current   ████████████████████   36639 ns/run   baseline
+                   ip        ██████                 11416 ns/run   69% faster
 
-dec_indef_array_current   ████████████████████   30935 ns/run   baseline
-dec_indef_array_body      ██████████             10813 ns/run   65% faster
+indef_map_100      current   ████████████████████   61327 ns/run   baseline
+                   ip        ██████                 17351 ns/run   72% faster
 
-dec_indef_map_current     ████████████████████   48553 ns/run   baseline
-dec_indef_map_body        ████████               19573 ns/run   60% faster
+indef_fold_10      current   ████████████████████    6370 ns/run   baseline
+                   ip        ████████                2610 ns/run   59% faster
+
+indef_nested       current   ████████████████████   23061 ns/run   baseline
+                   ip        ████████                8788 ns/run   62% faster
 ```
+
+### Cardano patterns with indefinite outer containers
+
+```
+indef_cert_20      current   ████████████████████   16906 ns/run   baseline
+                   ip        ███████████             9384 ns/run   44% faster
+
+plutus_indef_5     current   ████████████████████    5501 ns/run   baseline
+                   ip        █████████████████       4550 ns/run   17% faster
+```
+
+**Certificates (44%)**: Lower than pure collections because per-element
+overhead (arrayHeader, int dispatch, succeed/keep pipeline) dilutes the
+indefinite loop speedup.
+
+**Plutus (17%)**: The `oneOf` for major-type dispatch dominates. `oneOf`
+still delegates to `BD.oneOf` internally (no fast path). The speedup
+comes only from the outermost indefinite collection.
+
+### Definite-length controls
+
+```
+def_array_100      current   ████████████████████    5873 ns/run   baseline
+                   ip        ████████████████████    5885 ns/run   same
+
+def_map_100        current   ████████████████████   10523 ns/run   baseline
+                   ip        ████████████████████   10657 ns/run   same
+
+item               current   ████████████████████    2508 ns/run   baseline
+                   ip        ████████████████████    2528 ns/run   same
+```
+
+### Record builders
+
+```
+record_10          current   ████████████████████    1180 ns/run   baseline
+                   ip        ████████████████         957 ns/run   19% faster
+
+opt_record_10      current   ████████████████████    1195 ns/run   baseline
+                   ip        █████████████████████   1255 ns/run   5% slower
+
+keyed_10           current   ████████████████████    1870 ns/run   baseline
+                   ip        █████████████████████   1937 ns/run   4% slower
+```
+
+See **Record builder design** and **Performance: `toBD` hoisting** below
+for why `record_10` is faster and the others are slightly slower.
 
 
 ## Design
@@ -161,12 +212,17 @@ keep valueDecoder funcDecoder =
                     Pure (BD.map2 (\f v -> f v) funcBd valueBd)
 
         Item funcBody ->
-            Item (\ib -> BD.map2 (\f v -> f v) (funcBody ib) (toBD valueDecoder))
+            let valueBD = toBD valueDecoder
+            in Item (\ib -> BD.map2 (\f v -> f v) (funcBody ib) valueBD)
 ```
 
 The initial byte goes to the first `Item` decoder encountered. When
 `funcDecoder` is `Pure` (e.g. `succeed Foo`), the byte passes through to
 `valueDecoder`.
+
+When `funcDecoder` is `Item`, `toBD valueDecoder` is **hoisted** into a
+`let` binding so it is computed once at definition time, not on every
+decode run. See **Performance: `toBD` hoisting**.
 
 
 ### `map2`
@@ -176,7 +232,8 @@ map2 : (a -> b -> c) -> CborDecoder ctx a -> CborDecoder ctx b -> CborDecoder ct
 map2 f decoderA decoderB =
     case decoderA of
         Item bodyA ->
-            Item (\ib -> BD.map2 f (bodyA ib) (toBD decoderB))
+            let bdB = toBD decoderB
+            in Item (\ib -> BD.map2 f (bodyA ib) bdB)
 
         Pure bdA ->
             case decoderB of
@@ -211,6 +268,24 @@ All branches share the same initial byte. No wasted byte reads.
 `BD.oneOf` handles backtracking for body bytes only.
 
 
+### `lazy`
+
+```elm
+lazy : (() -> CborDecoder ctx a) -> CborDecoder ctx a
+lazy thunk =
+    Item
+        (\ib ->
+            case thunk () of
+                Item body -> body ib
+                Pure bd   -> bd
+        )
+```
+
+Always produces `Item` to preserve fast-path for recursive decoders.
+Without this, `andThen (\() -> recursiveDecoder) (succeed ())` would
+produce `Pure`, losing the `Item` body that indefinite loops need.
+
+
 ### `array` (the key optimization)
 
 ```elm
@@ -239,21 +314,7 @@ array elementDecoder =
                             []
 
                     Pure _ ->
-                        -- Pure element makes no sense in array; fall back to toBD
-                        BD.loop
-                            (\acc ->
-                                u8
-                                    |> BD.andThen
-                                        (\byte ->
-                                            if byte == 0xFF then
-                                                BD.succeed (BD.Done (List.reverse acc))
-
-                                            else
-                                                -- Cannot pass byte to Pure — reconstruct via oneOf-like fallback
-                                                BD.fail (WrongInitialByte { got = byte })
-                                        )
-                            )
-                            []
+                        BD.fail (WrongInitialByte { got = initialByte })
 
             else
                 withArgument additionalInfo
@@ -266,7 +327,155 @@ byte, checks for break, and calls the body directly. No `BD.oneOf`,
 stays on the fast `Decode.loop` kernel path.
 
 The `Pure` branch is degenerate — an array of `succeed` values is
-nonsensical. It can fail with an error.
+nonsensical. It fails with an error.
+
+
+## Record builder design
+
+The `RecordBuilder` uses a two-constructor type to optimize the common
+case (all `element`, no `optionalElement`):
+
+```elm
+type RecordBuilder ctx a
+    = SimpleBuilder Int (CborDecoder ctx a)
+    | CountedBuilder (Int -> BD.Decoder ctx DecodeError ( Int, a ))
+```
+
+### `SimpleBuilder` — the fast path
+
+When all fields use `element`, the builder stays as `SimpleBuilder`.
+`element` composes using `keep` directly — no `toBD`, no remaining-count
+threading. The entire decoder chain is built at definition time:
+
+```elm
+element : CborDecoder ctx v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
+element valueDecoder builder =
+    case builder of
+        SimpleBuilder count funcDecoder ->
+            SimpleBuilder (count + 1) (keep valueDecoder funcDecoder)
+        ...
+```
+
+`buildRecord` returns the pre-built `CborDecoder` directly (for exact
+element count), with no lambda evaluation or BD node allocation at
+decode time:
+
+```elm
+buildRecord (SimpleBuilder expectedCount decoder) =
+    arrayHeader
+        |> andThen (\maybeN ->
+            case maybeN of
+                Just n ->
+                    if n < expectedCount then fail TooFewElements
+                    else if n == expectedCount then decoder
+                    else decoder |> ignore (fromBD (skipItems (n - expectedCount)))
+                Nothing -> fail IndefiniteLengthNotSupported
+        )
+```
+
+This is why `record_10` is **19% faster** than current — the chain is
+pre-built via `keep` at definition time, while the current API evaluates
+nested `Int -> BD.Decoder` lambdas at decode time.
+
+
+### `CountedBuilder` — fallback for optional elements
+
+When `optionalElement` is used, the builder converts to `CountedBuilder`,
+which threads the remaining element count through a `BD.Decoder` pipeline.
+`toBD` calls are hoisted into `let` bindings:
+
+```elm
+optionalElement valueDecoder default builder =
+    let
+        valueBD = toBD valueDecoder
+        counted = toCountedInner builder
+    in
+    CountedBuilder (\remaining ->
+        counted remaining |> BD.andThen (\(rem, f) ->
+            if rem > 0 then valueBD |> BD.map (\v -> (rem - 1, f v))
+            else BD.succeed (0, f default)
+        ))
+```
+
+`toCountedInner` converts a `SimpleBuilder` to counted form, also
+pre-computing `toBD`:
+
+```elm
+toCountedInner (SimpleBuilder count decoder) =
+    let decoderBD = toBD decoder
+    in \remaining -> decoderBD |> BD.map (\value -> (remaining - count, value))
+```
+
+This is why `opt_record_10` is only **5% slower** — the hoisted `toBD`
+avoids per-decode allocations. The small overhead comes from the
+remaining-count threading that `SimpleBuilder` avoids entirely.
+
+
+### Keyed record builder
+
+The `KeyedRecordBuilder` uses `Int -> BD.Decoder` internally with
+hoisted `toBD` calls:
+
+```elm
+type KeyedRecordBuilder ctx k a
+    = KeyedRecordBuilder (CborDecoder ctx k) (Int -> BD.Decoder ctx DecodeError (KeyedState k a))
+```
+
+Every `required`/`optional` step needs `andThen` for key matching, so
+there is no `keep`-based shortcut (unlike `SimpleBuilder` for records).
+Pre-computing `toBD` at definition time is the best we can do:
+
+```elm
+required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
+    let
+        keyBD = toBD keyDecoder
+        valueBD = toBD valueDecoder
+    in
+    KeyedRecordBuilder keyDecoder (\remaining ->
+        innerDecoder remaining |> BD.andThen (\state ->
+            (case state.pendingKey of
+                Just k  -> BD.succeed k
+                Nothing -> keyBD
+            ) |> BD.andThen (\key ->
+                if key == expectedKey then
+                    valueBD |> BD.map (\v -> { ... })
+                else
+                    BD.fail KeyMismatch
+            )
+        ))
+```
+
+This gives **4% slower** — acceptable given that keyed records always
+need conditional key dispatch.
+
+
+## Performance: `toBD` hoisting
+
+**Critical optimization**: when `toBD` appears inside a lambda that runs
+at decode time, it allocates a fresh `u8 |> BD.andThen body` decoder on
+every decode. Hoisting it into a `let` binding outside the lambda
+computes it once at definition time.
+
+This applies to:
+- `keep` / `ignore` / `map2`: the branch where `toBD` is needed
+  for the second decoder
+- `element` / `optionalElement`: inside `CountedBuilder`
+- `required` / `optional`: for both key and value decoders
+
+**Measured impact**: Without hoisting, keyed records are **45% slower**
+(vs 4% with hoisting). The difference is 10 fields × 2 `toBD` calls ×
+per-decode allocation = significant overhead.
+
+**Why CborDecoder internals are slower for pipelines**: Using
+`CborDecoder` combinators (`andThen`, `map`) inside the builder pipeline
+means `andThen` calls `toBD` on the continuation result at decode time.
+This cannot be hoisted because the continuation depends on the decoded
+value. Using `BD.Decoder` directly with hoisted `toBD` avoids this —
+the pre-built `BD.Decoder` values are just referenced, not reconstructed.
+
+**Exception**: `SimpleBuilder` avoids the problem entirely by using
+`keep` at definition time, building the full chain before any decoding
+happens.
 
 
 ## Coverage of the current API
@@ -276,14 +485,15 @@ nonsensical. It can fail with an error.
 | Current function | Body decoder form | Notes |
 |-----------------|-------------------|-------|
 | `int`, `bigInt`, `float`, `bool`, `null`, `string`, `bytes` | `Item` body | Dispatch on initial byte |
-| `array`, `keyValue` | `Item` body | 3x faster indefinite path |
+| `array`, `keyValue` | `Item` body | ~3x faster indefinite path |
 | `field` | `Item` body | Initial byte is key's; value reads own |
 | `foldEntries` | `Item` body | Handler stays `k -> acc -> BD.Decoder` |
 | `tag` | `Item` body | Initial byte is tag header |
 | `arrayHeader`, `mapHeader` | `Item` body | Inspect initial byte + argument |
 | `item` | `Item` body | Already uses body pattern |
-| `record`, `element`, `optionalElement`, `buildRecord` | Internal `BD.Decoder` pipeline, `buildRecord` produces `Item` | `element` accepts `CborDecoder`, uses `toBD` internally |
-| `keyedRecord`, `required`, `optional`, `buildKeyedRecord` | Same pattern | `required`/`optional` accept `CborDecoder` |
+| `record`, `element`, `buildRecord` | `SimpleBuilder` uses `keep` chain | No `toBD` in common path |
+| `optionalElement` | Converts to `CountedBuilder` | Hoisted `toBD` |
+| `keyedRecord`, `required`, `optional`, `buildKeyedRecord` | `Int -> BD.Decoder` with hoisted `toBD` | Key matching needs `andThen` |
 | `DecodeError`, `errorToString` | Unchanged | Types only |
 
 ### BD combinators — all covered via CborDecoder equivalents
@@ -293,11 +503,11 @@ nonsensical. It can fail with an error.
 | `BD.succeed` | `succeed` (`Pure`) | No byte consumed |
 | `BD.fail` | `fail` (`Pure`) | No byte consumed |
 | `BD.map` | `map` | Preserves `Item`/`Pure` |
-| `BD.map2`–`map5` | `map2`–`map5` | First `Item` gets byte, rest use `toBD` |
+| `BD.map2`–`map5` | `map2`–`map5` | First `Item` gets byte, rest use hoisted `toBD` |
 | `BD.andThen` | `andThen` | Dispatches via `toBD` — correct for both next-item and post-process |
 | `BD.oneOf` | `oneOf` | Shares initial byte across branches |
-| `BD.keep` | `keep` | `Pure` func passes byte to value |
-| `BD.ignore` | `ignore` | Same dispatch logic |
+| `BD.keep` | `keep` | `Pure` func passes byte to value; hoisted `toBD` for `Item` func |
+| `BD.ignore` | `ignore` | Same dispatch logic; hoisted `toBD` |
 | `BD.loop` | `loop` | Body returns `BD.Decoder`, wraps result as `Pure` |
 | `BD.repeat` | Used internally by `array` | Not needed at user level |
 | `BD.inContext` | `inContext` | Wraps body decoder in error context |
@@ -334,17 +544,20 @@ correctly, `fail` is `Pure`. No byte wasted.
 
 ```elm
 decodePlutusData =
+    let self = lazy (\() -> decodePlutusData)
+    in
     oneOf
         [ decodeConstr
-        , keyValue decodePlutusData decodePlutusData |> map PlutusMap
-        , array decodePlutusData |> map PlutusArray
+        , keyValue self self |> map PlutusMap
+        , array self |> map PlutusArray
         , bigInt |> map PlutusBigInt
         , bytes |> map PlutusBytes
         ]
 ```
 
-All branches are `Item`. `oneOf` shares initial byte. Inner `array`
-and `keyValue` benefit from fast-path indefinite decoding for nested
+All branches are `Item`. `oneOf` shares initial byte. `lazy` ensures
+recursive references produce `Item` (not `Pure`). Inner `array` and
+`keyValue` benefit from fast-path indefinite decoding for nested
 `plutus_data` structures.
 
 
@@ -393,9 +606,8 @@ decodeValue =
         |> buildRecord
 ```
 
-`element` accepts `CborDecoder`, calls `toBD` internally to get a
-`BD.Decoder` for the pipeline. `buildRecord` wraps the result as `Item`.
-No change in user syntax.
+Uses `SimpleBuilder` path — `element` composes via `keep`, chain is
+pre-built at definition time. No `toBD` in the common path.
 
 
 ### Keyed record builders
@@ -410,8 +622,8 @@ decodeTxBody =
         |> buildKeyedRecord
 ```
 
-`required`/`optional` accept `CborDecoder`, use `toBD` internally.
-No change in user syntax.
+`required`/`optional` accept `CborDecoder`, use hoisted `toBD`
+internally. No change in user syntax.
 
 
 ### Large optional maps via foldEntries
@@ -500,6 +712,18 @@ no gaps. User-facing syntax is unchanged for all Cardano decoding
 patterns. The `Item`/`Pure` distinction is internal — users see one
 opaque `CborDecoder` type and use familiar combinators.
 
-The 3x speedup for indefinite-length collections comes from eliminating
-`BD.oneOf` in loops, keeping the fast `Decode.loop` kernel path.
-Definite-length performance is unchanged.
+**Indefinite-length collections**: 59–72% faster (eliminating `BD.oneOf`
+from loops, keeping the fast `Decode.loop` kernel path).
+
+**Cardano patterns**: 17–44% faster for indefinite outer containers,
+depending on how much per-element work dilutes the loop speedup.
+
+**Records**: 19% faster with `SimpleBuilder`/`keep` (all `element`).
+5% slower with `CountedBuilder` (`optionalElement`). Pre-built decoder
+chains at definition time are the key — avoid `toBD` inside decode-time
+lambdas.
+
+**Keyed records**: 4% slower. Key matching requires `andThen`, so
+`toBD` hoisting (not elimination) is the best optimization available.
+
+**Definite-length**: Unchanged (both use `BD.repeat`).

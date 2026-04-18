@@ -21,6 +21,7 @@ module DecodeItemPure exposing
     , dec_indef_fold_current, dec_indef_fold_ip
     , dec_indef_nested_current, dec_indef_nested_ip
     , dec_item_current, dec_item_ip
+    , dec_opt_record_current, dec_opt_record_ip
     )
 
 {-| Item/Pure body decoder: an opaque `CborDecoder` type with two constructors.
@@ -59,6 +60,7 @@ See `report-body-decoders.md` for the full design analysis.
     elm-bench -f DecodeItemPure.dec_def_array_current -f DecodeItemPure.dec_def_array_ip "()"
     elm-bench -f DecodeItemPure.dec_def_map_current -f DecodeItemPure.dec_def_map_ip "()"
     elm-bench -f DecodeItemPure.dec_record_10_current -f DecodeItemPure.dec_record_10_ip "()"
+    elm-bench -f DecodeItemPure.dec_opt_record_current -f DecodeItemPure.dec_opt_record_ip "()"
     elm-bench -f DecodeItemPure.dec_keyed_10_current -f DecodeItemPure.dec_keyed_10_ip "()"
     elm-bench -f DecodeItemPure.dec_item_current -f DecodeItemPure.dec_item_ip "()"
 
@@ -142,7 +144,11 @@ map2 : (a -> b -> c) -> CborDecoder ctx a -> CborDecoder ctx b -> CborDecoder ct
 map2 f decoderA decoderB =
     case decoderA of
         Item bodyA ->
-            Item (\ib -> BD.map2 f (bodyA ib) (toBD decoderB))
+            let
+                bdB =
+                    toBD decoderB
+            in
+            Item (\ib -> BD.map2 f (bodyA ib) bdB)
 
         Pure bdA ->
             case decoderB of
@@ -194,14 +200,22 @@ keep valueDecoder funcDecoder =
                     Pure (BD.map2 (\f v -> f v) funcBd valueBd)
 
         Item funcBody ->
-            Item (\ib -> BD.map2 (\f v -> f v) (funcBody ib) (toBD valueDecoder))
+            let
+                valueBD =
+                    toBD valueDecoder
+            in
+            Item (\ib -> BD.map2 (\f v -> f v) (funcBody ib) valueBD)
 
 
 ignore : CborDecoder ctx ignored -> CborDecoder ctx keep -> CborDecoder ctx keep
 ignore ignoredDecoder keepDecoder =
     case keepDecoder of
         Item keepBody ->
-            Item (\ib -> BD.map2 (\k _ -> k) (keepBody ib) (toBD ignoredDecoder))
+            let
+                ignoredBD =
+                    toBD ignoredDecoder
+            in
+            Item (\ib -> BD.map2 (\k _ -> k) (keepBody ib) ignoredBD)
 
         Pure keepBd ->
             case ignoredDecoder of
@@ -682,6 +696,10 @@ called directly after the break check — no `BD.oneOf`, stays on fast path.
 -}
 array : CborDecoder ctx a -> CborDecoder ctx (List a)
 array elementDecoder =
+    let
+        elementBD =
+            toBD elementDecoder
+    in
     Item
         (\initialByte ->
             let
@@ -719,7 +737,7 @@ array elementDecoder =
 
             else
                 withArgument additionalInfo
-                    (\count -> BD.repeat (toBD elementDecoder) count)
+                    (\count -> BD.repeat elementBD count)
         )
 
 
@@ -728,6 +746,13 @@ as `array`: the key's initial byte is passed directly to the key body.
 -}
 keyValue : CborDecoder ctx k -> CborDecoder ctx v -> CborDecoder ctx (List ( k, v ))
 keyValue keyDecoder valueDecoder =
+    let
+        valueBD =
+            toBD valueDecoder
+
+        keyBD =
+            toBD keyDecoder
+    in
     Item
         (\initialByte ->
             let
@@ -757,7 +782,7 @@ keyValue keyDecoder valueDecoder =
                                                 BD.map2
                                                     (\k v -> BD.Loop (( k, v ) :: acc))
                                                     (keyBody byte)
-                                                    (toBD valueDecoder)
+                                                    valueBD
                                         )
                             )
                             []
@@ -769,7 +794,7 @@ keyValue keyDecoder valueDecoder =
                 withArgument additionalInfo
                     (\count ->
                         BD.repeat
-                            (BD.map2 Tuple.pair (toBD keyDecoder) (toBD valueDecoder))
+                            (BD.map2 Tuple.pair keyBD valueBD)
                             count
                     )
         )
@@ -797,6 +822,10 @@ foldEntries :
     -> acc
     -> CborDecoder ctx acc
 foldEntries keyDecoder handler initialAcc =
+    let
+        keyBD =
+            toBD keyDecoder
+    in
     Item
         (\initialByte ->
             let
@@ -842,7 +871,7 @@ foldEntries keyDecoder handler initialAcc =
                                     BD.succeed (BD.Done acc)
 
                                 else
-                                    toBD keyDecoder
+                                    keyBD
                                         |> BD.andThen (\key -> handler key acc)
                                         |> BD.map (\newAcc -> BD.Loop ( remaining - 1, newAcc ))
                             )
@@ -853,6 +882,10 @@ foldEntries keyDecoder handler initialAcc =
 
 tag : Tag -> CborDecoder ctx a -> CborDecoder ctx a
 tag expectedTag innerDecoder =
+    let
+        innerBD =
+            toBD innerDecoder
+    in
     Item
         (\initialByte ->
             let
@@ -871,7 +904,7 @@ tag expectedTag innerDecoder =
                 withArgument additionalInfo
                     (\tagNum ->
                         if tagNum == tagToInt expectedTag then
-                            toBD innerDecoder
+                            innerBD
 
                         else
                             BD.fail (WrongTag { expected = tagToInt expectedTag, got = tagNum })
@@ -940,40 +973,57 @@ mapHeader =
 
 
 type RecordBuilder ctx a
-    = RecordBuilder (Int -> BD.Decoder ctx DecodeError ( Int, a ))
+    = SimpleBuilder Int (CborDecoder ctx a)
+    | CountedBuilder (Int -> BD.Decoder ctx DecodeError ( Int, a ))
 
 
 record : a -> RecordBuilder ctx a
 record constructor =
-    RecordBuilder (\remaining -> BD.succeed ( remaining, constructor ))
+    SimpleBuilder 0 (succeed constructor)
 
 
 element : CborDecoder ctx v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
-element valueDecoder (RecordBuilder innerDecoder) =
-    RecordBuilder
-        (\remaining ->
-            innerDecoder remaining
-                |> BD.andThen
-                    (\( rem, f ) ->
-                        if rem > 0 then
-                            toBD valueDecoder
-                                |> BD.map (\v -> ( rem - 1, f v ))
+element valueDecoder builder =
+    case builder of
+        SimpleBuilder count funcDecoder ->
+            SimpleBuilder (count + 1) (keep valueDecoder funcDecoder)
 
-                        else
-                            BD.fail TooFewElements
-                    )
-        )
+        CountedBuilder innerDecoder ->
+            let
+                valueBD =
+                    toBD valueDecoder
+            in
+            CountedBuilder
+                (\remaining ->
+                    innerDecoder remaining
+                        |> BD.andThen
+                            (\( rem, f ) ->
+                                if rem > 0 then
+                                    valueBD
+                                        |> BD.map (\v -> ( rem - 1, f v ))
+
+                                else
+                                    BD.fail TooFewElements
+                            )
+                )
 
 
 optionalElement : CborDecoder ctx v -> v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
-optionalElement valueDecoder default (RecordBuilder innerDecoder) =
-    RecordBuilder
+optionalElement valueDecoder default builder =
+    let
+        valueBD =
+            toBD valueDecoder
+
+        counted =
+            toCountedInner builder
+    in
+    CountedBuilder
         (\remaining ->
-            innerDecoder remaining
+            counted remaining
                 |> BD.andThen
                     (\( rem, f ) ->
                         if rem > 0 then
-                            toBD valueDecoder
+                            valueBD
                                 |> BD.map (\v -> ( rem - 1, f v ))
 
                         else
@@ -982,29 +1032,66 @@ optionalElement valueDecoder default (RecordBuilder innerDecoder) =
         )
 
 
+toCountedInner : RecordBuilder ctx a -> (Int -> BD.Decoder ctx DecodeError ( Int, a ))
+toCountedInner builder =
+    case builder of
+        SimpleBuilder count decoder ->
+            let
+                decoderBD =
+                    toBD decoder
+            in
+            \remaining ->
+                decoderBD |> BD.map (\value -> ( remaining - count, value ))
+
+        CountedBuilder inner ->
+            inner
+
+
 buildRecord : RecordBuilder ctx a -> CborDecoder ctx a
-buildRecord (RecordBuilder decoder) =
-    andThen
-        (\maybeN ->
-            case maybeN of
-                Just n ->
-                    fromBD
-                        (decoder n
-                            |> BD.andThen
-                                (\( rem, value ) ->
-                                    if rem == 0 then
-                                        BD.succeed value
+buildRecord builder =
+    case builder of
+        SimpleBuilder expectedCount decoder ->
+            arrayHeader
+                |> andThen
+                    (\maybeN ->
+                        case maybeN of
+                            Just n ->
+                                if n < expectedCount then
+                                    fail TooFewElements
 
-                                    else
-                                        skipItems rem
-                                            |> BD.map (\_ -> value)
+                                else if n == expectedCount then
+                                    decoder
+
+                                else
+                                    decoder
+                                        |> ignore (fromBD (skipItems (n - expectedCount)))
+
+                            Nothing ->
+                                fail IndefiniteLengthNotSupported
+                    )
+
+        CountedBuilder decoder ->
+            andThen
+                (\maybeN ->
+                    case maybeN of
+                        Just n ->
+                            fromBD
+                                (decoder n
+                                    |> BD.andThen
+                                        (\( rem, value ) ->
+                                            if rem == 0 then
+                                                BD.succeed value
+
+                                            else
+                                                skipItems rem
+                                                    |> BD.map (\_ -> value)
+                                        )
                                 )
-                        )
 
-                Nothing ->
-                    fail IndefiniteLengthNotSupported
-        )
-        arrayHeader
+                        Nothing ->
+                            fail IndefiniteLengthNotSupported
+                )
+                arrayHeader
 
 
 
@@ -1038,6 +1125,13 @@ keyedRecord keyDecoder constructor =
 
 required : k -> CborDecoder ctx v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
 required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
+    let
+        keyBD =
+            toBD keyDecoder
+
+        valueBD =
+            toBD valueDecoder
+    in
     KeyedRecordBuilder keyDecoder
         (\remaining ->
             innerDecoder remaining
@@ -1048,12 +1142,12 @@ required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
                                 BD.succeed k
 
                             Nothing ->
-                                toBD keyDecoder
+                                keyBD
                         )
                             |> BD.andThen
                                 (\key ->
                                     if key == expectedKey then
-                                        toBD valueDecoder
+                                        valueBD
                                             |> BD.map
                                                 (\v ->
                                                     { remaining = state.remaining - 1
@@ -1071,6 +1165,13 @@ required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
 
 optional : k -> CborDecoder ctx v -> v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
 optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDecoder) =
+    let
+        keyBD =
+            toBD keyDecoder
+
+        valueBD =
+            toBD valueDecoder
+    in
     KeyedRecordBuilder keyDecoder
         (\remaining ->
             innerDecoder remaining
@@ -1089,12 +1190,12 @@ optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDe
                                     BD.succeed k
 
                                 Nothing ->
-                                    toBD keyDecoder
+                                    keyBD
                             )
                                 |> BD.andThen
                                     (\key ->
                                         if key == expectedKey then
-                                            toBD valueDecoder
+                                            valueBD
                                                 |> BD.map
                                                     (\v ->
                                                         { remaining = state.remaining - 1
@@ -1356,6 +1457,20 @@ itemBody initialByte =
 -- ============================================================================
 
 
+type alias OptR =
+    { a : Int
+    , b : Int
+    , c : Int
+    , d : Int
+    , e : Int
+    , f : Int
+    , g : Int
+    , h : Int
+    , i : Int
+    , j : Int
+    }
+
+
 type Certificate
     = Registration Int
     | Delegation Int Int
@@ -1543,10 +1658,46 @@ decKR10IP =
 
 decFoldIP : CborDecoder ctx (List ( Int, Int ))
 decFoldIP =
+    let
+        intBD =
+            toBD int
+    in
     foldEntries int
-        (\key acc -> toBD int |> BD.map (\v -> ( key, v ) :: acc))
+        (\key acc -> intBD |> BD.map (\v -> ( key, v ) :: acc))
         []
         |> map List.reverse
+
+
+decOptRCurrent : BD.Decoder ctx CD.DecodeError OptR
+decOptRCurrent =
+    CD.record OptR
+        |> CD.optionalElement CD.int 0
+        |> CD.optionalElement CD.int 0
+        |> CD.optionalElement CD.int 0
+        |> CD.optionalElement CD.int 0
+        |> CD.optionalElement CD.int 0
+        |> CD.optionalElement CD.int 0
+        |> CD.optionalElement CD.int 0
+        |> CD.optionalElement CD.int 0
+        |> CD.optionalElement CD.int 0
+        |> CD.optionalElement CD.int 0
+        |> CD.buildRecord
+
+
+decOptRIP : CborDecoder ctx OptR
+decOptRIP =
+    record OptR
+        |> optionalElement int 0
+        |> optionalElement int 0
+        |> optionalElement int 0
+        |> optionalElement int 0
+        |> optionalElement int 0
+        |> optionalElement int 0
+        |> optionalElement int 0
+        |> optionalElement int 0
+        |> optionalElement int 0
+        |> optionalElement int 0
+        |> buildRecord
 
 
 
@@ -1840,3 +1991,13 @@ dec_item_current () =
 dec_item_ip : () -> Maybe CborItem
 dec_item_ip () =
     BD.decode (toBD item) itemTestData |> Result.toMaybe
+
+
+dec_opt_record_current : () -> Maybe OptR
+dec_opt_record_current () =
+    BD.decode decOptRCurrent record10Data |> Result.toMaybe
+
+
+dec_opt_record_ip : () -> Maybe OptR
+dec_opt_record_ip () =
+    BD.decode (toBD decOptRIP) record10Data |> Result.toMaybe
