@@ -1,7 +1,6 @@
 module Cbor exposing
-    ( CborItem(..), IntWidth(..), FloatWidth(..), SimpleWidth(..), Length(..), Sign(..), Tag(..)
+    ( CborItem(..), IntWidth(..), FloatWidth(..), SimpleWidth(..), Length(..), Sign(..), Tag(..), tagToInt
     , diagnose
-    , tagToInt
     )
 
 {-| CBOR (Concise Binary Object Representation) data model and diagnostic notation.
@@ -9,7 +8,7 @@ module Cbor exposing
 This module defines `CborItem`, a lossless representation of any well-formed
 CBOR encoding per [RFC 8949](https://datatracker.ietf.org/doc/html/rfc8949).
 
-@docs CborItem, IntWidth, FloatWidth, SimpleWidth, Length, Sign, Tag
+@docs CborItem, IntWidth, FloatWidth, SimpleWidth, Length, Sign, Tag, tagToInt
 @docs diagnose
 
 -}
@@ -146,11 +145,7 @@ diagnose : CborItem -> String
 diagnose item =
     case item of
         CborInt52 width n ->
-            if n >= 0 then
-                String.fromInt n ++ intWidthSuffix width
-
-            else
-                String.fromInt n ++ intWidthSuffix width
+            String.fromInt n ++ intWidthSuffix width
 
         CborInt64 sign bs ->
             let

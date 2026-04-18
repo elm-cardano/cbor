@@ -66,7 +66,7 @@ import Bytes.Decode
 import Bytes.Encode as BE
 import Bytes.Floating.Decode
 import Bytes.Floating.Encode
-import Cbor exposing (..)
+import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), Tag, tagToInt)
 
 
 {-| An encoder that produces CBOR bytes when given a `Strategy`.
@@ -874,9 +874,6 @@ compareBytes a b =
 
         lenB =
             Bytes.width b
-
-        minLen =
-            min lenA lenB
 
         aList =
             bytesToList a

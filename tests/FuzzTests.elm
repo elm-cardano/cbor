@@ -3,13 +3,13 @@ module FuzzTests exposing (suite)
 import Bytes exposing (Bytes)
 import Bytes.Decoder as BD
 import Bytes.Encode as BE
-import Cbor exposing (..)
+import Cbor exposing (CborItem(..), Length(..), Sign(..), Tag(..))
 import Cbor.Decode as CD
 import Cbor.Encode as CE
 import Expect
 import Fuzz exposing (Fuzzer)
 import Hex
-import Test exposing (..)
+import Test exposing (Test, describe, fuzz, fuzz2)
 
 
 
@@ -402,14 +402,15 @@ escapeHatchProperties =
                             )
                             presentFlags
 
-                    expectedCount =
-                        List.length (List.filter identity presentFlags)
-
                     encoded =
                         CE.encode CE.deterministic (CE.keyedRecord CE.int entries)
                 in
                 case BD.decode CD.item encoded of
                     Ok (CborMap _ mapEntries) ->
+                        let
+                            expectedCount =
+                                List.length (List.filter identity presentFlags)
+                        in
                         List.length mapEntries
                             |> Expect.equal expectedCount
 

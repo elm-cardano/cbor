@@ -62,7 +62,7 @@ import Bitwise
 import Bytes
 import Bytes.Decoder as BD
 import Bytes.Encode
-import Cbor exposing (..)
+import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), tagToInt)
 
 
 
@@ -284,24 +284,26 @@ float =
                 let
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
                 in
                 if majorType /= 7 then
                     BD.fail ("Expected float (major type 7) but got major type " ++ String.fromInt majorType)
 
-                else if additionalInfo == 25 then
-                    BD.float16 Bytes.BE
-
-                else if additionalInfo == 26 then
-                    BD.float32 Bytes.BE
-
-                else if additionalInfo == 27 then
-                    BD.float64 Bytes.BE
-
                 else
-                    BD.fail ("Expected float (additional info 25/26/27) but got " ++ String.fromInt additionalInfo)
+                    let
+                        additionalInfo =
+                            Bitwise.and 0x1F initialByte
+                    in
+                    if additionalInfo == 25 then
+                        BD.float16 Bytes.BE
+
+                    else if additionalInfo == 26 then
+                        BD.float32 Bytes.BE
+
+                    else if additionalInfo == 27 then
+                        BD.float64 Bytes.BE
+
+                    else
+                        BD.fail ("Expected float (additional info 25/26/27) but got " ++ String.fromInt additionalInfo)
             )
 
 
@@ -351,37 +353,39 @@ string =
                 let
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
                 in
                 if majorType /= 3 then
                     BD.fail ("Expected text string (major type 3) but got major type " ++ String.fromInt majorType)
 
-                else if additionalInfo == 31 then
-                    BD.loop
-                        (\chunks ->
-                            u8
-                                |> BD.andThen
-                                    (\byte ->
-                                        if byte == 0xFF then
-                                            BD.succeed (BD.Done (String.concat (List.reverse chunks)))
-
-                                        else
-                                            let
-                                                chunkAI =
-                                                    Bitwise.and 0x1F byte
-                                            in
-                                            decodeArgument chunkAI
-                                                |> BD.andThen (\len -> BD.string len)
-                                                |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
-                                    )
-                        )
-                        []
-
                 else
-                    decodeArgument additionalInfo
-                        |> BD.andThen (\len -> BD.string len)
+                    let
+                        additionalInfo =
+                            Bitwise.and 0x1F initialByte
+                    in
+                    if additionalInfo == 31 then
+                        BD.loop
+                            (\chunks ->
+                                u8
+                                    |> BD.andThen
+                                        (\byte ->
+                                            if byte == 0xFF then
+                                                BD.succeed (BD.Done (String.concat (List.reverse chunks)))
+
+                                            else
+                                                let
+                                                    chunkAI =
+                                                        Bitwise.and 0x1F byte
+                                                in
+                                                decodeArgument chunkAI
+                                                    |> BD.andThen (\len -> BD.string len)
+                                                    |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
+                                        )
+                            )
+                            []
+
+                    else
+                        decodeArgument additionalInfo
+                            |> BD.andThen (\len -> BD.string len)
             )
 
 
@@ -398,37 +402,39 @@ bytes =
                 let
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
                 in
                 if majorType /= 2 then
                     BD.fail ("Expected byte string (major type 2) but got major type " ++ String.fromInt majorType)
 
-                else if additionalInfo == 31 then
-                    BD.loop
-                        (\chunks ->
-                            u8
-                                |> BD.andThen
-                                    (\byte ->
-                                        if byte == 0xFF then
-                                            BD.succeed (BD.Done (concatBytes (List.reverse chunks)))
-
-                                        else
-                                            let
-                                                chunkAI =
-                                                    Bitwise.and 0x1F byte
-                                            in
-                                            decodeArgument chunkAI
-                                                |> BD.andThen (\len -> BD.bytes len)
-                                                |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
-                                    )
-                        )
-                        []
-
                 else
-                    decodeArgument additionalInfo
-                        |> BD.andThen (\len -> BD.bytes len)
+                    let
+                        additionalInfo =
+                            Bitwise.and 0x1F initialByte
+                    in
+                    if additionalInfo == 31 then
+                        BD.loop
+                            (\chunks ->
+                                u8
+                                    |> BD.andThen
+                                        (\byte ->
+                                            if byte == 0xFF then
+                                                BD.succeed (BD.Done (concatBytes (List.reverse chunks)))
+
+                                            else
+                                                let
+                                                    chunkAI =
+                                                        Bitwise.and 0x1F byte
+                                                in
+                                                decodeArgument chunkAI
+                                                    |> BD.andThen (\len -> BD.bytes len)
+                                                    |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
+                                        )
+                            )
+                            []
+
+                    else
+                        decodeArgument additionalInfo
+                            |> BD.andThen (\len -> BD.bytes len)
             )
 
 
@@ -440,14 +446,15 @@ decodeBytesRaw =
                 let
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
                 in
                 if majorType /= 2 then
                     BD.fail ("Expected byte string (major type 2) but got major type " ++ String.fromInt majorType)
 
                 else
+                    let
+                        additionalInfo =
+                            Bitwise.and 0x1F initialByte
+                    in
                     decodeArgument additionalInfo
                         |> BD.andThen (\len -> BD.bytes len)
             )
@@ -470,26 +477,28 @@ array elementDecoder =
                 let
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
                 in
                 if majorType /= 4 then
                     BD.fail ("Expected array (major type 4) but got major type " ++ String.fromInt majorType)
 
-                else if additionalInfo == 31 then
-                    BD.loop
-                        (\acc ->
-                            BD.oneOf
-                                [ breakCode |> BD.map (\_ -> BD.Done (List.reverse acc))
-                                , elementDecoder |> BD.map (\v -> BD.Loop (v :: acc))
-                                ]
-                        )
-                        []
-
                 else
-                    decodeArgument additionalInfo
-                        |> BD.andThen (\count -> BD.repeat elementDecoder count)
+                    let
+                        additionalInfo =
+                            Bitwise.and 0x1F initialByte
+                    in
+                    if additionalInfo == 31 then
+                        BD.loop
+                            (\acc ->
+                                BD.oneOf
+                                    [ breakCode |> BD.map (\_ -> BD.Done (List.reverse acc))
+                                    , elementDecoder |> BD.map (\v -> BD.Loop (v :: acc))
+                                    ]
+                            )
+                            []
+
+                    else
+                        decodeArgument additionalInfo
+                            |> BD.andThen (\count -> BD.repeat elementDecoder count)
             )
 
 
@@ -506,30 +515,32 @@ keyValue keyDecoder valueDecoder =
                 let
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
                 in
                 if majorType /= 5 then
                     BD.fail ("Expected map (major type 5) but got major type " ++ String.fromInt majorType)
 
-                else if additionalInfo == 31 then
-                    BD.loop
-                        (\acc ->
-                            BD.oneOf
-                                [ breakCode |> BD.map (\_ -> BD.Done (List.reverse acc))
-                                , BD.map2 Tuple.pair keyDecoder valueDecoder
-                                    |> BD.map (\pair -> BD.Loop (pair :: acc))
-                                ]
-                        )
-                        []
-
                 else
-                    decodeArgument additionalInfo
-                        |> BD.andThen
-                            (\count ->
-                                BD.repeat (BD.map2 Tuple.pair keyDecoder valueDecoder) count
+                    let
+                        additionalInfo =
+                            Bitwise.and 0x1F initialByte
+                    in
+                    if additionalInfo == 31 then
+                        BD.loop
+                            (\acc ->
+                                BD.oneOf
+                                    [ breakCode |> BD.map (\_ -> BD.Done (List.reverse acc))
+                                    , BD.map2 Tuple.pair keyDecoder valueDecoder
+                                        |> BD.map (\pair -> BD.Loop (pair :: acc))
+                                    ]
                             )
+                            []
+
+                    else
+                        decodeArgument additionalInfo
+                            |> BD.andThen
+                                (\count ->
+                                    BD.repeat (BD.map2 Tuple.pair keyDecoder valueDecoder) count
+                                )
             )
 
 
@@ -573,41 +584,43 @@ foldEntries keyDecoder handler initialAcc =
                 let
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
                 in
                 if majorType /= 5 then
                     BD.fail ("Expected map (major type 5) but got major type " ++ String.fromInt majorType)
 
-                else if additionalInfo == 31 then
-                    BD.loop
-                        (\acc ->
-                            BD.oneOf
-                                [ breakCode |> BD.map (\_ -> BD.Done acc)
-                                , keyDecoder
-                                    |> BD.andThen (\key -> handler key acc)
-                                    |> BD.map BD.Loop
-                                ]
-                        )
-                        initialAcc
-
                 else
-                    decodeArgument additionalInfo
-                        |> BD.andThen
-                            (\count ->
-                                BD.loop
-                                    (\( remaining, acc ) ->
-                                        if remaining <= 0 then
-                                            BD.succeed (BD.Done acc)
-
-                                        else
-                                            keyDecoder
-                                                |> BD.andThen (\key -> handler key acc)
-                                                |> BD.map (\newAcc -> BD.Loop ( remaining - 1, newAcc ))
-                                    )
-                                    ( count, initialAcc )
+                    let
+                        additionalInfo =
+                            Bitwise.and 0x1F initialByte
+                    in
+                    if additionalInfo == 31 then
+                        BD.loop
+                            (\acc ->
+                                BD.oneOf
+                                    [ breakCode |> BD.map (\_ -> BD.Done acc)
+                                    , keyDecoder
+                                        |> BD.andThen (\key -> handler key acc)
+                                        |> BD.map BD.Loop
+                                    ]
                             )
+                            initialAcc
+
+                    else
+                        decodeArgument additionalInfo
+                            |> BD.andThen
+                                (\count ->
+                                    BD.loop
+                                        (\( remaining, acc ) ->
+                                            if remaining <= 0 then
+                                                BD.succeed (BD.Done acc)
+
+                                            else
+                                                keyDecoder
+                                                    |> BD.andThen (\key -> handler key acc)
+                                                    |> BD.map (\newAcc -> BD.Loop ( remaining - 1, newAcc ))
+                                        )
+                                        ( count, initialAcc )
+                                )
             )
 
 
@@ -624,14 +637,15 @@ tag expectedTag innerDecoder =
                 let
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
                 in
                 if majorType /= 6 then
                     BD.fail ("Expected tag (major type 6) but got major type " ++ String.fromInt majorType)
 
                 else
+                    let
+                        additionalInfo =
+                            Bitwise.and 0x1F initialByte
+                    in
                     decodeArgument additionalInfo
                         |> BD.andThen
                             (\tagNum ->
@@ -659,19 +673,21 @@ arrayHeader =
                 let
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
                 in
                 if majorType /= 4 then
                     BD.fail ("Expected array (major type 4) but got major type " ++ String.fromInt majorType)
 
-                else if additionalInfo == 31 then
-                    BD.succeed Nothing
-
                 else
-                    decodeArgument additionalInfo
-                        |> BD.map Just
+                    let
+                        additionalInfo =
+                            Bitwise.and 0x1F initialByte
+                    in
+                    if additionalInfo == 31 then
+                        BD.succeed Nothing
+
+                    else
+                        decodeArgument additionalInfo
+                            |> BD.map Just
             )
 
 
@@ -686,19 +702,21 @@ mapHeader =
                 let
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
                 in
                 if majorType /= 5 then
                     BD.fail ("Expected map (major type 5) but got major type " ++ String.fromInt majorType)
 
-                else if additionalInfo == 31 then
-                    BD.succeed Nothing
-
                 else
-                    decodeArgument additionalInfo
-                        |> BD.map Just
+                    let
+                        additionalInfo =
+                            Bitwise.and 0x1F initialByte
+                    in
+                    if additionalInfo == 31 then
+                        BD.succeed Nothing
+
+                    else
+                        decodeArgument additionalInfo
+                            |> BD.map Just
             )
 
 
