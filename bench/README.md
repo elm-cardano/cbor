@@ -88,85 +88,6 @@ elm-bench -f Bench.dec_keyed_30_keyValue -f Bench.dec_keyed_30_fold "()"
 ```
 
 
-### 9. String encoding — avoid intermediate buffer
-
-V1 encodes the string to a temporary `Bytes` to measure UTF-8 length,
-then copies. V2 uses `BE.getStringWidth` and writes directly. V2b adds
-packed header (#2) on top.
-
-```sh
-elm-bench -f BenchOptimize.enc_string_v1 -f BenchOptimize.enc_string_v2 -f BenchOptimize.enc_string_v2b "()"
-```
-
-### 10. Header packing for argument 24–255
-
-For CBOR headers with argument 24–255 (e.g. 32-byte hashes), V1 emits
-`sequence [U8, U8]` (6 allocations). V2 packs into a single `U16` (1 allocation).
-
-```sh
-elm-bench -f BenchOptimize.enc_header_v1 -f BenchOptimize.enc_header_v2 "()"
-```
-
-### 11. Break appending — `++ [break]` vs nested sequence
-
-In indefinite-length mode, V1 appends the break byte with `++` (O(N)).
-V2 wraps items in a nested `sequence` (O(1)).
-
-```sh
-elm-bench -f BenchOptimize.enc_indef_v1_100 -f BenchOptimize.enc_indef_v2_100 "()"
-elm-bench -f BenchOptimize.enc_indef_v1_1000 -f BenchOptimize.enc_indef_v2_1000 "()"
-```
-
-### 12. Map entries — `List.concatMap` vs `List.foldr`
-
-In `encodeItem CborMap`, V1 uses `List.concatMap` (N intermediate 2-element
-lists). V2 uses `List.foldr` (direct cons).
-
-```sh
-elm-bench -f BenchOptimize.enc_mapfold_v1_100 -f BenchOptimize.enc_mapfold_v2_100 "()"
-```
-
-### 13. Float fast-reject — range guard before float16 round-trip
-
-V1 always runs the float16 round-trip check. V2 skips it when
-`abs f > 65504` (float16 max). Test data: large float64 values.
-
-```sh
-elm-bench -f BenchOptimize.enc_guard_v1 -f BenchOptimize.enc_guard_v2 "()"
-```
-
-### 14. Int decoder — safeArgument (merged overflow check)
-
-V1 uses `decodeArgument |> andThen (overflow check)` — two `andThen` levels.
-V2 uses `safeArgument` which merges the overflow check into the argument
-decoder. For inline/u8/u16/u32 values, no overflow check needed.
-
-```sh
-elm-bench -f BenchOptimize.dec_int_v1 -f BenchOptimize.dec_int_v2 "()"
-```
-
-### 15. String decoder — withArgument (fused continuation)
-
-V1 uses `decodeArgument |> andThen (\len -> BD.string len)` — for inline
-lengths, builds `BD.succeed len` then immediately unwraps it.
-V2 uses `withArgument` which calls the continuation directly.
-
-```sh
-elm-bench -f BenchOptimize.dec_string_v1 -f BenchOptimize.dec_string_v2 "()"
-```
-
-### 16. Item decoder — withArgument + BD.repeat
-
-V1 uses `decodeArgument |> andThen` + manual `BD.loop` with tuple state
-for definite-length collections.
-V2 uses `withArgument` + `BD.repeat` (optimized kernel path).
-
-```sh
-elm-bench -f BenchOptimize.dec_item_array_v1 -f BenchOptimize.dec_item_array_v2 "()"
-elm-bench -f BenchOptimize.dec_item_map_v1 -f BenchOptimize.dec_item_map_v2 "()"
-```
-
-
 ## Optimization results
 
 ### Key sorting: `compareBytes` (V1 -> V5)
@@ -245,11 +166,18 @@ Symmetric trade-off (~50% each way). **V1 kept** — small integers
 (float16-representable) are common in Cardano CBOR data.
 
 
-### Encoder optimizations (opportunities 1–5)
+### Encoder optimizations
 
 Five micro-optimizations applied to `Cbor.Encode` internals.
 
 #### 1. String encoding: `getStringWidth` (no intermediate buffer)
+
+The `string` encoder used to encode the full string into a temporary `DataView`
+just to measure the UTF-8 byte length, then copy into the final buffer. The
+optimized version uses `BE.getStringWidth` (pure arithmetic on character codes)
+and writes the string directly — eliminating the intermediate `ArrayBuffer` +
+`DataView` allocation, the first `write_string` call, and the `write_bytes`
+copy loop.
 
 ```
   enc_string_v1    ████████████████████   332129 ns/run   baseline
@@ -259,7 +187,13 @@ Five micro-optimizations applied to `Cbor.Encode` internals.
 
 **V2b adopted** (40% faster). Uses `BE.getStringWidth` + packed header.
 
-#### 2. Header packing: `unsignedInt16` for argument 24–255
+#### 2. Header packing: `unsignedInt16` for argument 24-255
+
+For argument values 24-255, the encoder created `BE.sequence [U8, U8]`
+(6 heap allocations: 1 Seq + 2 cons + 1 nil + 2 U8). Since these are two
+consecutive big-endian bytes, they pack into a single `BE.unsignedInt16`
+(1 allocation). This matters for Cardano hashes (28 or 32 bytes), addresses,
+and policy IDs which all hit this branch.
 
 ```
   enc_header_v1   ████████████████████   82090 ns/run   baseline
@@ -269,6 +203,10 @@ Five micro-optimizations applied to `Cbor.Encode` internals.
 **V2 adopted** (29% faster). Packs initial byte + argument into a single `U16`.
 
 #### 3. Break appending: nested sequence vs `++ [break]`
+
+Indefinite-length encoders used `++` to append the break byte (O(N) list
+traversal). Wrapping items in a nested `BE.sequence` avoids the traversal
+entirely (O(1)). The extra `Seq` node is trivial compared to the O(N) copy.
 
 ```
   enc_indef_v1_100    ████████████████████   1095 ns/run    baseline
@@ -282,6 +220,9 @@ Five micro-optimizations applied to `Cbor.Encode` internals.
 
 #### 4. Map entries: `List.foldr` vs `List.concatMap`
 
+`encodeItem CborMap` used `List.concatMap` (N intermediate 2-element lists +
+concat). `List.foldr` builds the flat list directly with cons operations.
+
 ```
   enc_mapfold_v1_100   ████████████████████   10176 ns/run   baseline
   enc_mapfold_v2_100   █████████████████      8746 ns/run    14% faster
@@ -291,20 +232,38 @@ Five micro-optimizations applied to `Cbor.Encode` internals.
 
 #### 5. Float fast-reject: range guard before float16 round-trip
 
+The `float16RoundTrips` check allocates a `DataView`, writes 2 bytes, reads
+them back, and compares. For values that can never be float16, a cheap
+`abs f <= 65504` guard skips the round-trip entirely (IEEE 754 float16 max is
+65504). Special values (NaN, +-Infinity) bypass the guard.
+
 ```
   enc_guard_v1   ████████████████████   481971 ns/run   baseline
   enc_guard_v2   ██████████             248229 ns/run   48% faster
 ```
 
 **V2 adopted** (48% faster). Skips float16 round-trip when `abs f > 65504`.
-Special values (NaN, ±Infinity) bypass the guard.
 
 
-### Decoder optimizations (opportunities 1–3)
+### Decoder optimizations
 
-Three optimizations applied to `Cbor.Decode` internals.
+Three optimizations applied to `Cbor.Decode` internals, based on the
+`Bytes.Decoder` architecture (dual-path: fast `elm/bytes` path +
+slow state-passing path for error reporting).
+
+Key insight: `BD.andThen` on the fast path composes via
+`Decode.andThen` in the elm/bytes kernel. `BD.succeed v |> BD.andThen f`
+allocates an intermediate `Decoder` node just to immediately unwrap it.
+Avoiding this on hot paths saves one closure + one `Decode.andThen`
+composition per call.
 
 #### 1. Int decoder: `safeArgument` (merged overflow check)
+
+The int decoder had two `andThen` layers: `decodeArgument |> andThen` then
+a second `andThen` for the overflow check. But overflow can only happen for
+64-bit arguments (`additionalInfo == 27`). `safeArgument` merges both:
+for inline/u8/u16/u32, it returns the value directly with no overflow check;
+for 64-bit, the check is inside `safeArgument`.
 
 ```
   dec_int_v1   ████████████████████   106933 ns/run   baseline
@@ -316,6 +275,11 @@ for inline/u8/u16/u32 values, no overflow check needed.
 
 #### 2. String decoder: `withArgument` (fused continuation)
 
+The string decoder used `decodeArgument |> andThen (\len -> BD.string len)`.
+For inline lengths (<=23), `decodeArgument` returns `BD.succeed len`, which
+allocates an intermediate `Decoder` node just to unwrap it in the next
+`andThen`. `withArgument` calls the continuation directly for inline args.
+
 ```
   dec_string_v1   ████████████████████   12608 ns/run   baseline
   dec_string_v2   ████████████           7726 ns/run   39% faster
@@ -325,6 +289,11 @@ for inline/u8/u16/u32 values, no overflow check needed.
 instead of `BD.succeed len |> BD.andThen f`.
 
 #### 3. Item decoder: `withArgument` + `BD.repeat`
+
+The item decoder used `decodeArgument |> andThen` + manual `BD.loop` with
+tuple state `(remaining, acc)` for definite-length collections. `BD.repeat`
+has a dedicated fast path (`repeatFast`) with an optimized
+accumulator, eliminating per-iteration tuple allocation.
 
 ```
   dec_item_array_v1   ████████████████████   14903 ns/run   baseline
@@ -336,3 +305,154 @@ instead of `BD.succeed len |> BD.andThen f`.
 
 **V2 adopted** (10-23% faster). Uses `withArgument` across all major types
 and `BD.repeat` for definite-length arrays and maps.
+
+
+### Body decoder: `CborDecoder` Item/Pure migration
+
+Replacing `BD.Decoder ctx DecodeError a` with an opaque `CborDecoder ctx a`
+type where every decoder receives its initial byte pre-read, enabling
+fast-path indefinite-length decoding.
+
+#### Problem
+
+Indefinite-length `array`, `keyValue`, and `foldEntries` used
+`BD.oneOf [breakCode, elementDecoder]` to detect the `0xFF` break byte.
+But `BD.oneOf` has **no fast path** in `elm-cardano/bytes-decoder` — it
+forces the entire loop onto the slow state-passing path.
+
+#### Core type
+
+```elm
+type CborDecoder ctx a
+    = Item (Int -> BD.Decoder ctx DecodeError a)
+    | Pure (BD.Decoder ctx DecodeError a)
+```
+
+Every CBOR item decoder is `Item` — a function from initial byte to body
+decoder. Non-consuming operations (`succeed`, `fail`) are `Pure`. The
+initial byte read is handled at composition boundaries via `toBD`:
+
+```elm
+toBD : CborDecoder ctx a -> BD.Decoder ctx DecodeError a
+toBD decoder =
+    case decoder of
+        Item body -> u8 |> BD.andThen body
+        Pure bd   -> bd
+```
+
+#### Why Item/Pure?
+
+A naive body decoder (only `Item`, no `Pure`) breaks the sum type dispatch
+pattern. `succeed Foo` doesn't consume a CBOR item — with only `Item`,
+`andThen` always reads a new initial byte for the continuation, wasting a
+byte and corrupting the decode position. The `Item`/`Pure` distinction
+makes `andThen` dispatch correctly.
+
+#### Key optimization: indefinite-length arrays
+
+```elm
+array elementDecoder =
+    Item (\initialByte ->
+        ...
+        if additionalInfo == 31 then
+            case elementDecoder of
+                Item elementBody ->
+                    -- FAST PATH: read byte, check break, dispatch to body
+                    BD.loop (\acc ->
+                        u8 |> BD.andThen (\byte ->
+                            if byte == 0xFF then
+                                BD.succeed (BD.Done (List.reverse acc))
+                            else
+                                elementBody byte
+                                    |> BD.map (\v -> BD.Loop (v :: acc))
+                        )
+                    ) []
+                ...
+        else
+            withArgument additionalInfo
+                (\count -> BD.repeat (toBD elementDecoder) count)
+    )
+```
+
+For `Item` elements, the indefinite loop reads one byte, checks for break,
+and calls the body directly. No `BD.oneOf`, stays on the fast `Decode.loop` path.
+
+#### Performance: `toBD` hoisting
+
+When `toBD` appears inside a lambda that runs at decode time, it allocates
+a fresh `u8 |> BD.andThen body` decoder on every decode. Hoisting into a
+`let` binding computes it once at definition time. Without hoisting, keyed
+records are **45% slower** (vs 4% with hoisting).
+
+#### Record builders
+
+The `RecordBuilder` uses `SimpleBuilder` (all `element`, composed via `keep`
+at definition time) and `CountedBuilder` (for `optionalElement`, threads
+remaining count).
+
+- `SimpleBuilder`: the chain is pre-built before decoding — no `toBD` in
+  the common path
+- `CountedBuilder`: hoisted `toBD` avoids per-decode allocations
+- `KeyedRecordBuilder`: key matching requires `andThen`, so `toBD` hoisting
+  (not elimination) is the best optimization available
+
+#### Results
+
+##### Indefinite-length collections
+
+```
+indef_array_100    current   ████████████████████   36639 ns/run   baseline
+                   ip        ██████                 11416 ns/run   69% faster
+
+indef_map_100      current   ████████████████████   61327 ns/run   baseline
+                   ip        ██████                 17351 ns/run   72% faster
+
+indef_fold_10      current   ████████████████████    6370 ns/run   baseline
+                   ip        ████████                2610 ns/run   59% faster
+
+indef_nested       current   ████████████████████   23061 ns/run   baseline
+                   ip        ████████                8788 ns/run   62% faster
+```
+
+##### Cardano patterns with indefinite outer containers
+
+```
+indef_cert_20      current   ████████████████████   16906 ns/run   baseline
+                   ip        ███████████             9384 ns/run   44% faster
+
+plutus_indef_5     current   ████████████████████    5501 ns/run   baseline
+                   ip        █████████████████       4550 ns/run   17% faster
+```
+
+##### Definite-length controls (unchanged)
+
+```
+def_array_100      current   ████████████████████    5873 ns/run   baseline
+                   ip        ████████████████████    5885 ns/run   same
+
+def_map_100        current   ████████████████████   10523 ns/run   baseline
+                   ip        ████████████████████   10657 ns/run   same
+```
+
+##### Record builders
+
+```
+record_10          current   ████████████████████    1180 ns/run   baseline
+                   ip        ████████████████         957 ns/run   19% faster
+
+opt_record_10      current   ████████████████████    1195 ns/run   baseline
+                   ip        █████████████████████   1255 ns/run   5% slower
+
+keyed_10           current   ████████████████████    1870 ns/run   baseline
+                   ip        █████████████████████   1937 ns/run   4% slower
+```
+
+**Indefinite-length collections**: 59-72% faster (eliminating `BD.oneOf`
+from loops, keeping the fast `Decode.loop` path).
+
+**Cardano patterns**: 17-44% faster for indefinite outer containers.
+
+**Records**: 19% faster with `SimpleBuilder`/`keep` (all `element`).
+5% slower with `CountedBuilder` (`optionalElement`). 4% slower for keyed records.
+
+**Definite-length**: Unchanged.
