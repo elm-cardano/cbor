@@ -151,6 +151,8 @@ Maps use `List { key : CborItem, value : CborItem }` rather than `Dict`:
 
 `CborItem` is not `comparable` in Elm's type system due to `Bytes` (no structural equality/ordering). For deterministic encoding, map key sorting is implemented by comparing the encoded CBOR byte representations — encoding each key and comparing byte-by-byte. This is correct per RFC 8949 Section 4.2.1 (length-first lexicographic order of encoded forms).
 
+The byte comparison uses `Bytes.Decode` to read one byte at a time by offset, avoiding the allocation of intermediate lists. The `byteAt` helper decodes a single `unsignedInt8` at a given position, and `compareBytesFrom` recurses through both byte sequences from a starting offset, comparing corresponding bytes until a difference is found or one sequence ends.
+
 ## Module Structure
 
 ```
@@ -167,7 +169,7 @@ Cbor.Decode        -- combinators for decoding CBOR bytes to domain types
 
 ### Encoder and Decoder Types
 
-Decoding uses `Bytes.Decoder.Decoder context error value` from `elm-cardano/bytes-decoder` directly. Users call `Bytes.Decoder.decode` to run decoders. The `context` and `error` type parameters remain polymorphic in all `Cbor.Decode` combinators.
+Decoding uses `Bytes.Decoder.Decoder context error value` from `elm-cardano/bytes-decoder` directly. Users call `Bytes.Decoder.decode` to run decoders. All `Cbor.Decode` combinators fix the `error` parameter to `DecodeError` for structured, pattern-matchable errors. The `context` parameter remains polymorphic.
 
 Encoding uses a custom `Encoder` type that defers strategy decisions:
 
@@ -181,7 +183,27 @@ This allows the same encoder definition to produce different byte representation
 
 ### Error Handling
 
-Decoding errors use `elm-cardano/bytes-decoder`'s error type:
+All `Cbor.Decode` combinators use a concrete `DecodeError` type for CBOR-specific errors:
+
+```elm
+type DecodeError
+    = WrongMajorType { expected : Int, got : Int }
+    | WrongInitialByte { got : Int }
+    | WrongTag { expected : Int, got : Int }
+    | ReservedAdditionalInfo Int
+    | IntegerOverflow
+    | KeyMismatch
+    | TooFewElements
+    | UnexpectedPendingKey
+    | IndefiniteLengthNotSupported
+    | UnknownMajorType Int
+```
+
+This replaces the previous design where the `error` type parameter was polymorphic and errors were opaque `String` values passed to `BD.fail`. With `DecodeError`, callers can pattern-match on specific failure modes (e.g., distinguish a type mismatch from an integer overflow) and produce domain-specific error messages.
+
+The `errorToString` function converts any `DecodeError` to a human-readable message for logging or display.
+
+These errors are wrapped by `elm-cardano/bytes-decoder`'s `Error` type, which adds position tracking and context:
 
 ```elm
 type Error context error
@@ -191,7 +213,7 @@ type Error context error
     | BadOneOf { at : Int } (List (Error context error))
 ```
 
-CBOR-specific errors (wrong major type, value out of range, malformed encoding) are reported via `fail` inside `andThen` chains. The error type is the caller's choice — the library is polymorphic over both `context` and `error` throughout.
+A CBOR decode failure produces `Custom { at = byteOffset } (WrongMajorType { expected = 0, got = 3 })`, giving both the byte position and the structured reason. The `context` type parameter remains polymorphic — callers can use `BD.inContext` to add domain-specific labels.
 
 ### Encoding Combinators
 
@@ -288,41 +310,43 @@ Cbor.Encode.encode myCustomStrategy (personEncoder alice)
 
 ### Decoding Combinators
 
+All combinators use `DecodeError` as the error type. The `ctx` parameter remains polymorphic for caller-defined context labels via `BD.inContext`.
+
 ```elm
 -- Primitives
-Cbor.Decode.int : Decoder ctx err Int              -- major types 0, 1; fails if |value| > 2^52
-Cbor.Decode.bigInt : Decoder ctx err ( Sign, Bytes ) -- major types 0, 1 + tags 2, 3; minimal big-endian bytes
-Cbor.Decode.float : Decoder ctx err Float          -- major type 7, additional info 25/26/27
-Cbor.Decode.bool : Decoder ctx err Bool            -- 0xf4 (false), 0xf5 (true)
-Cbor.Decode.null : a -> Decoder ctx err a          -- 0xf6; returns the provided value
-Cbor.Decode.string : Decoder ctx err String        -- major type 3; concatenates indefinite-length chunks
-Cbor.Decode.bytes : Decoder ctx err Bytes          -- major type 2; concatenates indefinite-length chunks
+Cbor.Decode.int : Decoder ctx DecodeError Int              -- major types 0, 1; fails if |value| > 2^52
+Cbor.Decode.bigInt : Decoder ctx DecodeError ( Sign, Bytes ) -- major types 0, 1 + tags 2, 3; minimal big-endian bytes
+Cbor.Decode.float : Decoder ctx DecodeError Float          -- major type 7, additional info 25/26/27
+Cbor.Decode.bool : Decoder ctx DecodeError Bool            -- 0xf4 (false), 0xf5 (true)
+Cbor.Decode.null : a -> Decoder ctx DecodeError a          -- 0xf6; returns the provided value
+Cbor.Decode.string : Decoder ctx DecodeError String        -- major type 3; concatenates indefinite-length chunks
+Cbor.Decode.bytes : Decoder ctx DecodeError Bytes          -- major type 2; concatenates indefinite-length chunks
 
 -- Collections
-Cbor.Decode.array : Decoder ctx err a -> Decoder ctx err (List a)
-Cbor.Decode.keyValue : Decoder ctx err k -> Decoder ctx err v -> Decoder ctx err (List ( k, v ))
-Cbor.Decode.field : k -> Decoder ctx err k -> Decoder ctx err v -> Decoder ctx err v
-Cbor.Decode.foldEntries : Decoder ctx err k -> (k -> acc -> Decoder ctx err acc) -> acc -> Decoder ctx err acc
-Cbor.Decode.tag : Tag -> Decoder ctx err a -> Decoder ctx err a
+Cbor.Decode.array : Decoder ctx DecodeError a -> Decoder ctx DecodeError (List a)
+Cbor.Decode.keyValue : Decoder ctx DecodeError k -> Decoder ctx DecodeError v -> Decoder ctx DecodeError (List ( k, v ))
+Cbor.Decode.field : k -> Decoder ctx DecodeError k -> Decoder ctx DecodeError v -> Decoder ctx DecodeError v
+Cbor.Decode.foldEntries : Decoder ctx DecodeError k -> (k -> acc -> Decoder ctx DecodeError acc) -> acc -> Decoder ctx DecodeError acc
+Cbor.Decode.tag : Tag -> Decoder ctx DecodeError a -> Decoder ctx DecodeError a
 
 -- Record builder (CBOR arrays → Elm values, positional)
-Cbor.Decode.record : a -> RecordBuilder ctx err a
-Cbor.Decode.element : Decoder ctx err v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
-Cbor.Decode.optionalElement : Decoder ctx err v -> v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
-Cbor.Decode.buildRecord : RecordBuilder ctx err a -> Decoder ctx err a
+Cbor.Decode.record : a -> RecordBuilder ctx DecodeError a
+Cbor.Decode.element : Decoder ctx DecodeError v -> RecordBuilder ctx DecodeError (v -> a) -> RecordBuilder ctx DecodeError a
+Cbor.Decode.optionalElement : Decoder ctx DecodeError v -> v -> RecordBuilder ctx DecodeError (v -> a) -> RecordBuilder ctx DecodeError a
+Cbor.Decode.buildRecord : RecordBuilder ctx DecodeError a -> Decoder ctx DecodeError a
 
 -- Keyed record builder (CBOR maps → Elm values, key-based)
-Cbor.Decode.keyedRecord : Decoder ctx err k -> a -> KeyedRecordBuilder ctx err k a
-Cbor.Decode.required : k -> Decoder ctx err v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
-Cbor.Decode.optional : k -> Decoder ctx err v -> v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
-Cbor.Decode.buildKeyedRecord : KeyedRecordBuilder ctx err k a -> Decoder ctx err a
+Cbor.Decode.keyedRecord : Decoder ctx DecodeError k -> a -> KeyedRecordBuilder ctx DecodeError k a
+Cbor.Decode.required : k -> Decoder ctx DecodeError v -> KeyedRecordBuilder ctx DecodeError k (v -> a) -> KeyedRecordBuilder ctx DecodeError k a
+Cbor.Decode.optional : k -> Decoder ctx DecodeError v -> v -> KeyedRecordBuilder ctx DecodeError k (v -> a) -> KeyedRecordBuilder ctx DecodeError k a
+Cbor.Decode.buildKeyedRecord : KeyedRecordBuilder ctx DecodeError k a -> Decoder ctx DecodeError a
 
 -- Structure headers (for manual heterogeneous structures)
-Cbor.Decode.arrayHeader : Decoder ctx err (Maybe Int)   -- Nothing for indefinite
-Cbor.Decode.mapHeader : Decoder ctx err (Maybe Int)     -- Nothing for indefinite
+Cbor.Decode.arrayHeader : Decoder ctx DecodeError (Maybe Int)   -- Nothing for indefinite
+Cbor.Decode.mapHeader : Decoder ctx DecodeError (Maybe Int)     -- Nothing for indefinite
 
 -- Escape hatch
-Cbor.Decode.item : Decoder ctx err CborItem
+Cbor.Decode.item : Decoder ctx DecodeError CborItem
 ```
 
 Composition combinators (`succeed`, `fail`, `andThen`, `oneOf`, `map`, `map2`–`map5`, `keep`, `ignore`, `loop`, `repeat`, `inContext`) come from `Bytes.Decoder` directly — no re-exports.
@@ -380,12 +404,12 @@ Injects pre-encoded CBOR bytes directly without validation. Ignores strategy (li
 #### Record builder (CBOR arrays → Elm values)
 
 ```elm
-type RecordBuilder ctx err a  -- opaque
+type RecordBuilder ctx DecodeError a  -- opaque
 
-record : a -> RecordBuilder ctx err a
-element : Decoder ctx err v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
-optionalElement : Decoder ctx err v -> v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
-buildRecord : RecordBuilder ctx err a -> Decoder ctx err a
+record : a -> RecordBuilder ctx DecodeError a
+element : Decoder ctx DecodeError v -> RecordBuilder ctx DecodeError (v -> a) -> RecordBuilder ctx DecodeError a
+optionalElement : Decoder ctx DecodeError v -> v -> RecordBuilder ctx DecodeError (v -> a) -> RecordBuilder ctx DecodeError a
+buildRecord : RecordBuilder ctx DecodeError a -> Decoder ctx DecodeError a
 ```
 
 Decodes a CBOR array into an Elm value. Each `element`/`optionalElement` step decodes one array item positionally.
@@ -398,15 +422,15 @@ Internally, the builder threads a `remaining` counter through the pipeline via `
 
 ```elm
 -- Internal (not public API):
-type RecordBuilder ctx err a
-    = RecordBuilder (Int -> Decoder ctx err ( Int, a ))
+type RecordBuilder ctx DecodeError a
+    = RecordBuilder (Int -> Decoder ctx DecodeError ( Int, a ))
     -- remaining -> decoder producing (updated remaining, value)
 
-record : a -> RecordBuilder ctx err a
+record : a -> RecordBuilder ctx DecodeError a
 record constructor =
     RecordBuilder (\remaining -> succeed ( remaining, constructor ))
 
-element : Decoder ctx err v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
+element : Decoder ctx DecodeError v -> RecordBuilder ctx DecodeError (v -> a) -> RecordBuilder ctx DecodeError a
 element valueDecoder (RecordBuilder innerDecoder) =
     RecordBuilder (\remaining ->
         innerDecoder remaining
@@ -418,7 +442,7 @@ element valueDecoder (RecordBuilder innerDecoder) =
             )
     )
 
-optionalElement : Decoder ctx err v -> v -> RecordBuilder ctx err (v -> a) -> RecordBuilder ctx err a
+optionalElement : Decoder ctx DecodeError v -> v -> RecordBuilder ctx DecodeError (v -> a) -> RecordBuilder ctx DecodeError a
 optionalElement valueDecoder default (RecordBuilder innerDecoder) =
     RecordBuilder (\remaining ->
         innerDecoder remaining
@@ -430,7 +454,7 @@ optionalElement valueDecoder default (RecordBuilder innerDecoder) =
             )
     )
 
-buildRecord : RecordBuilder ctx err a -> Decoder ctx err a
+buildRecord : RecordBuilder ctx DecodeError a -> Decoder ctx DecodeError a
 buildRecord (RecordBuilder decoder) =
     arrayHeader
         |> andThen (\maybeN ->
@@ -452,7 +476,7 @@ buildRecord (RecordBuilder decoder) =
 Each `element` wraps the inner decoder in `andThen`, decodes one value, decrements `remaining`, and applies the value to the partially applied constructor. For definite-length arrays, `remaining` starts at the header count and must reach 0.
 
 ```elm
-decodePoint : Decoder ctx err Point
+decodePoint : Decoder ctx DecodeError Point
 decodePoint =
     Cbor.Decode.record Point
         |> Cbor.Decode.element Cbor.Decode.float
@@ -464,12 +488,12 @@ decodePoint =
 #### Keyed record builder (CBOR maps → Elm values)
 
 ```elm
-type KeyedRecordBuilder ctx err k a  -- opaque
+type KeyedRecordBuilder ctx DecodeError k a  -- opaque
 
-keyedRecord : Decoder ctx err k -> a -> KeyedRecordBuilder ctx err k a
-required : k -> Decoder ctx err v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
-optional : k -> Decoder ctx err v -> v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
-buildKeyedRecord : KeyedRecordBuilder ctx err k a -> Decoder ctx err a
+keyedRecord : Decoder ctx DecodeError k -> a -> KeyedRecordBuilder ctx DecodeError k a
+required : k -> Decoder ctx DecodeError v -> KeyedRecordBuilder ctx DecodeError k (v -> a) -> KeyedRecordBuilder ctx DecodeError k a
+optional : k -> Decoder ctx DecodeError v -> v -> KeyedRecordBuilder ctx DecodeError k (v -> a) -> KeyedRecordBuilder ctx DecodeError k a
+buildKeyedRecord : KeyedRecordBuilder ctx DecodeError k a -> Decoder ctx DecodeError a
 ```
 
 Decodes a CBOR map into an Elm value. Each `required`/`optional` step decodes one map entry by key.
@@ -478,8 +502,8 @@ Internally, the builder threads a `State` through the pipeline via `andThen`, si
 
 ```elm
 -- Internal (not public API):
-type KeyedRecordBuilder ctx err k a
-    = KeyedRecordBuilder (Decoder ctx err k) (Int -> Decoder ctx err (State k a))
+type KeyedRecordBuilder ctx DecodeError k a
+    = KeyedRecordBuilder (Decoder ctx DecodeError k) (Int -> Decoder ctx DecodeError (State k a))
     -- (key decoder, remaining -> decoder producing State)
 
 type alias State k a =
@@ -488,14 +512,14 @@ type alias State k a =
     , value : a             -- partially applied constructor
     }
 
-keyedRecord : Decoder ctx err k -> a -> KeyedRecordBuilder ctx err k a
+keyedRecord : Decoder ctx DecodeError k -> a -> KeyedRecordBuilder ctx DecodeError k a
 keyedRecord keyDecoder constructor =
     KeyedRecordBuilder keyDecoder
         (\remaining ->
             succeed { remaining = remaining, pendingKey = Nothing, value = constructor }
         )
 
-required : k -> Decoder ctx err v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
+required : k -> Decoder ctx DecodeError v -> KeyedRecordBuilder ctx DecodeError k (v -> a) -> KeyedRecordBuilder ctx DecodeError k a
 required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
     KeyedRecordBuilder keyDecoder
         (\remaining ->
@@ -520,7 +544,7 @@ required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
                 )
         )
 
-optional : k -> Decoder ctx err v -> v -> KeyedRecordBuilder ctx err k (v -> a) -> KeyedRecordBuilder ctx err k a
+optional : k -> Decoder ctx DecodeError v -> v -> KeyedRecordBuilder ctx DecodeError k (v -> a) -> KeyedRecordBuilder ctx DecodeError k a
 optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDecoder) =
     KeyedRecordBuilder keyDecoder
         (\remaining ->
@@ -552,7 +576,7 @@ optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDe
                 )
         )
 
-buildKeyedRecord : KeyedRecordBuilder ctx err k a -> Decoder ctx err a
+buildKeyedRecord : KeyedRecordBuilder ctx DecodeError k a -> Decoder ctx DecodeError a
 buildKeyedRecord (KeyedRecordBuilder _ decoder) =
     mapHeader
         |> andThen (\maybeN ->
@@ -579,7 +603,7 @@ buildKeyedRecord (KeyedRecordBuilder _ decoder) =
 **All required fields:**
 
 ```elm
-decodePerson : Decoder ctx err Person
+decodePerson : Decoder ctx DecodeError Person
 decodePerson =
     Cbor.Decode.keyedRecord Cbor.Decode.int Person
         |> Cbor.Decode.required 0 Cbor.Decode.string
@@ -590,7 +614,7 @@ decodePerson =
 **With optional fields:**
 
 ```elm
-decodePerson : Decoder ctx err Person
+decodePerson : Decoder ctx DecodeError Person
 decodePerson =
     Cbor.Decode.keyedRecord Cbor.Decode.int Person
         |> Cbor.Decode.required 0 Cbor.Decode.string
@@ -619,7 +643,7 @@ Both builders support indefinite-length containers. For indefinite-length arrays
 #### Low-level field combinator
 
 ```elm
-field : k -> Decoder ctx err k -> Decoder ctx err v -> Decoder ctx err v
+field : k -> Decoder ctx DecodeError k -> Decoder ctx DecodeError v -> Decoder ctx DecodeError v
 ```
 
 Decodes the next key, compares to expected `k` via `==`, decodes value on match, fails on mismatch. This is the primitive used internally by `required`. It can also be used directly with `mapHeader` + `keep`/`ignore` for manual decoding without the builder.
@@ -628,10 +652,10 @@ Decodes the next key, compares to expected `k` via `==`, decodes value on match,
 
 ```elm
 foldEntries :
-    Decoder ctx err k
-    -> (k -> acc -> Decoder ctx err acc)
+    Decoder ctx DecodeError k
+    -> (k -> acc -> Decoder ctx DecodeError acc)
     -> acc
-    -> Decoder ctx err acc
+    -> Decoder ctx DecodeError acc
 ```
 
 Reads the map header, then loops through entries. For each entry: decode the key, call the handler with the key and current accumulator. The handler decodes the value and returns the updated accumulator. Handles both definite and indefinite-length maps.
@@ -639,7 +663,7 @@ Reads the map header, then loops through entries. For each entry: decode the key
 ```elm
 type alias Partial = { name : Maybe String, age : Maybe Int }
 
-decodePerson : Decoder ctx err Person
+decodePerson : Decoder ctx DecodeError Person
 decodePerson =
     Cbor.Decode.foldEntries Cbor.Decode.int
         (\key partial ->
@@ -660,7 +684,7 @@ decodePerson =
                 ( Just n, Just a ) ->
                     Bytes.Decoder.succeed (Person n a)
                 _ ->
-                    Bytes.Decoder.fail MissingFields
+                    Bytes.Decoder.fail KeyMismatch
         )
 ```
 
@@ -707,7 +731,7 @@ Bridge functions between the combinator world and the generic tree:
 
 ```elm
 Cbor.Encode.item : CborItem -> Encoder          -- lossless (ignores Strategy)
-Cbor.Decode.item : Decoder ctx err CborItem      -- full CBOR parser
+Cbor.Decode.item : Decoder ctx DecodeError CborItem      -- full CBOR parser
 ```
 
 Use cases: round-tripping unknown CBOR, diagnostic notation (`Cbor.diagnose : CborItem -> String`), inspecting/debugging arbitrary data, skipping unknown values.
@@ -737,7 +761,7 @@ Every discriminated union in the Cardano CDDL is a CBOR array where the first el
 Approach: read the array header, read the discriminant int, dispatch via `andThen` + `case`. Remaining fields decoded with `succeed`/`keep`. No new combinators needed.
 
 ```elm
-decodeCertificate : Decoder ctx err Certificate
+decodeCertificate : Decoder ctx DecodeError Certificate
 decodeCertificate =
     arrayHeader
         |> andThen (\_ ->
@@ -752,7 +776,7 @@ decodeCertificate =
                             |> keep decodePoolKeyhash
                     ...
                     _ ->
-                        fail (UnknownCertificateTag tag)
+                        fail (WrongInitialByte { got = tag })
             )
         )
 ```
@@ -830,14 +854,14 @@ Several types accept multiple CBOR shapes for the same semantic value. In every 
 Approach: `oneOf` with each encoding as a branch. Since major types differ, the first byte is enough to reject a wrong branch — backtracking cost is one byte.
 
 ```elm
-decodeSet : Decoder ctx err a -> Decoder ctx err (List a)
+decodeSet : Decoder ctx DecodeError a -> Decoder ctx DecodeError (List a)
 decodeSet elementDecoder =
     oneOf
         [ tag (Unknown 258) (array elementDecoder)
         , array elementDecoder
         ]
 
-decodeValue : Decoder ctx err Value
+decodeValue : Decoder ctx DecodeError Value
 decodeValue =
     oneOf
         [ int |> map Coin
