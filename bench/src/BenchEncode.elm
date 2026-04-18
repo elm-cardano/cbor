@@ -2,8 +2,8 @@ module BenchEncode exposing
     ( enc_v1_map_int100, enc_v2_map_int100, enc_v3_map_int100, enc_v5_map_int100
     , enc_v1_map_int1000, enc_v2_map_int1000, enc_v3_map_int1000, enc_v5_map_int1000
     , enc_v1_map_str100, enc_v2_map_str100, enc_v3_map_str100, enc_v5_map_str100
-    , enc_v1_map_str100_early, enc_v2_map_str100_early, enc_v3_map_str100_early, enc_v5_map_str100_early
     , enc_v1_canonical_str100, enc_v2_canonical_str100
+    , enc_v1_map_str100_early, enc_v2_map_str100_early, enc_v3_map_str100_early, enc_v5_map_str100_early
     , enc_v1_float_f16, enc_v2_float_f16
     , enc_v1_float_f32, enc_v2_float_f32
     , enc_v1_float_f64, enc_v2_float_f64

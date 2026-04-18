@@ -1,5 +1,5 @@
 module Cbor.Decode exposing
-    ( DecodeError (..), errorToString
+    ( DecodeError(..), errorToString
     , int, bigInt, float, bool, null, string, bytes
     , array, keyValue, field, foldEntries, tag
     , RecordBuilder, record, element, optionalElement, buildRecord
@@ -65,7 +65,6 @@ import Bytes
 import Bytes.Decoder as BD
 import Bytes.Encode
 import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), tagToInt)
-
 
 
 {-| Structured error type for CBOR decoding failures.
