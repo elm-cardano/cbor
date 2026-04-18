@@ -67,6 +67,7 @@ import Bytes.Encode as BE
 import Bytes.Floating.Decode
 import Bytes.Floating.Encode
 import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), Tag, tagToInt)
+import Hex
 
 
 {-| An encoder that produces CBOR bytes when given a `Strategy`.
@@ -101,7 +102,7 @@ Lexicographic byte order on encoded keys. Definite length.
 -}
 deterministic : Strategy
 deterministic =
-    { sortKeys = List.sortWith compareByteKeys
+    { sortKeys = sortKeysByHex
     , lengthMode = Definite
     }
 
@@ -113,7 +114,7 @@ Shorter keys first, then lexicographic within same length. Definite length.
 -}
 canonical : Strategy
 canonical =
-    { sortKeys = List.sortWith canonicalCompare
+    { sortKeys = sortKeysCanonicalByHex
     , lengthMode = Definite
     }
 
@@ -126,7 +127,7 @@ Shorter keys first, then lexicographic within same length. Definite length.
 -}
 ctap2 : Strategy
 ctap2 =
-    { sortKeys = List.sortWith canonicalCompare
+    { sortKeys = sortKeysCanonicalByHex
     , lengthMode = Definite
     }
 
@@ -868,60 +869,17 @@ encodeItem cborItem =
 -- INTERNAL: KEY SORTING
 
 
-compareByteKeys : ( Bytes.Bytes, a ) -> ( Bytes.Bytes, a ) -> Order
-compareByteKeys ( a, _ ) ( b, _ ) =
-    compareBytes a b
+sortKeysByHex : List ( Bytes.Bytes, BE.Encoder ) -> List ( Bytes.Bytes, BE.Encoder )
+sortKeysByHex entries =
+    entries
+        |> List.map (\( bs, enc ) -> ( Hex.fromBytes bs, ( bs, enc ) ))
+        |> List.sortBy Tuple.first
+        |> List.map Tuple.second
 
 
-canonicalCompare : ( Bytes.Bytes, a ) -> ( Bytes.Bytes, a ) -> Order
-canonicalCompare ( a, _ ) ( b, _ ) =
-    let
-        lenA : Int
-        lenA =
-            Bytes.width a
-
-        lenB : Int
-        lenB =
-            Bytes.width b
-    in
-    case compare lenA lenB of
-        EQ ->
-            compareBytes a b
-
-        other ->
-            other
-
-
-compareBytes : Bytes.Bytes -> Bytes.Bytes -> Order
-compareBytes a b =
-    compareBytesFrom 0 a b
-
-
-compareBytesFrom : Int -> Bytes.Bytes -> Bytes.Bytes -> Order
-compareBytesFrom i a b =
-    case ( byteAt i a, byteAt i b ) of
-        ( Just x, Just y ) ->
-            case compare x y of
-                EQ ->
-                    compareBytesFrom (i + 1) a b
-
-                other ->
-                    other
-
-        ( Just _, Nothing ) ->
-            GT
-
-        ( Nothing, Just _ ) ->
-            LT
-
-        ( Nothing, Nothing ) ->
-            EQ
-
-
-byteAt : Int -> Bytes.Bytes -> Maybe Int
-byteAt offset bs =
-    Bytes.Decode.decode
-        (Bytes.Decode.bytes offset
-            |> Bytes.Decode.andThen (\_ -> Bytes.Decode.unsignedInt8)
-        )
-        bs
+sortKeysCanonicalByHex : List ( Bytes.Bytes, BE.Encoder ) -> List ( Bytes.Bytes, BE.Encoder )
+sortKeysCanonicalByHex entries =
+    entries
+        |> List.map (\( bs, enc ) -> ( ( Bytes.width bs, Hex.fromBytes bs ), ( bs, enc ) ))
+        |> List.sortBy Tuple.first
+        |> List.map Tuple.second
