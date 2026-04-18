@@ -51,8 +51,8 @@ config =
         |> Rule.ignoreErrorsForDirectories [ "tests/" ]
     , NoExposingEverything.rule
     , NoImportingEverything.rule []
-    -- , NoMissingTypeAnnotation.rule
-    -- , NoMissingTypeAnnotationInLetIn.rule
+    , NoMissingTypeAnnotation.rule
+    , NoMissingTypeAnnotationInLetIn.rule
     , NoMissingTypeExpose.rule
     , NoSimpleLetBody.rule
     , NoPrematureLetComputation.rule

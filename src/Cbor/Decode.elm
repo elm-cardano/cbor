@@ -194,9 +194,11 @@ int =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
 
+                    additionalInfo : Int
                     additionalInfo =
                         Bitwise.and 0x1F initialByte
                 in
@@ -239,9 +241,11 @@ bigInt =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
 
+                    additionalInfo : Int
                     additionalInfo =
                         Bitwise.and 0x1F initialByte
                 in
@@ -282,6 +286,7 @@ float =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
@@ -290,6 +295,7 @@ float =
 
                 else
                     let
+                        additionalInfo : Int
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
@@ -351,6 +357,7 @@ string =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
@@ -359,6 +366,7 @@ string =
 
                 else
                     let
+                        additionalInfo : Int
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
@@ -373,6 +381,7 @@ string =
 
                                             else
                                                 let
+                                                    chunkAI : Int
                                                     chunkAI =
                                                         Bitwise.and 0x1F byte
                                                 in
@@ -400,6 +409,7 @@ bytes =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
@@ -408,6 +418,7 @@ bytes =
 
                 else
                     let
+                        additionalInfo : Int
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
@@ -422,6 +433,7 @@ bytes =
 
                                             else
                                                 let
+                                                    chunkAI : Int
                                                     chunkAI =
                                                         Bitwise.and 0x1F byte
                                                 in
@@ -444,6 +456,7 @@ decodeBytesRaw =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
@@ -452,6 +465,7 @@ decodeBytesRaw =
 
                 else
                     let
+                        additionalInfo : Int
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
@@ -475,6 +489,7 @@ array elementDecoder =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
@@ -483,6 +498,7 @@ array elementDecoder =
 
                 else
                     let
+                        additionalInfo : Int
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
@@ -513,6 +529,7 @@ keyValue keyDecoder valueDecoder =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
@@ -521,6 +538,7 @@ keyValue keyDecoder valueDecoder =
 
                 else
                     let
+                        additionalInfo : Int
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
@@ -582,6 +600,7 @@ foldEntries keyDecoder handler initialAcc =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
@@ -590,6 +609,7 @@ foldEntries keyDecoder handler initialAcc =
 
                 else
                     let
+                        additionalInfo : Int
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
@@ -635,6 +655,7 @@ tag expectedTag innerDecoder =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
@@ -643,6 +664,7 @@ tag expectedTag innerDecoder =
 
                 else
                     let
+                        additionalInfo : Int
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
@@ -671,6 +693,7 @@ arrayHeader =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
@@ -679,6 +702,7 @@ arrayHeader =
 
                 else
                     let
+                        additionalInfo : Int
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
@@ -700,6 +724,7 @@ mapHeader =
         |> BD.andThen
             (\initialByte ->
                 let
+                    majorType : Int
                     majorType =
                         Bitwise.shiftRightZfBy 5 initialByte
                 in
@@ -708,6 +733,7 @@ mapHeader =
 
                 else
                     let
+                        additionalInfo : Int
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
@@ -990,9 +1016,11 @@ item =
 decodeItemBody : Int -> BD.Decoder ctx String CborItem
 decodeItemBody initialByte =
     let
+        majorType : Int
         majorType =
             Bitwise.shiftRightZfBy 5 initialByte
 
+        additionalInfo : Int
         additionalInfo =
             Bitwise.and 0x1F initialByte
     in
@@ -1003,6 +1031,7 @@ decodeItemBody initialByte =
                 BD.map2
                     (\hi lo ->
                         let
+                            n : Int
                             n =
                                 hi * 0x0000000100000000 + lo
                         in
@@ -1025,6 +1054,7 @@ decodeItemBody initialByte =
                 BD.map2
                     (\hi lo ->
                         let
+                            n : Int
                             n =
                                 hi * 0x0000000100000000 + lo
                         in
@@ -1252,9 +1282,11 @@ skipEntries count =
 intToHex : Int -> String
 intToHex n =
     let
+        hi : Int
         hi =
             Bitwise.shiftRightZfBy 4 n
 
+        lo : Int
         lo =
             Bitwise.and 0x0F n
     in

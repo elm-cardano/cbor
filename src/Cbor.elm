@@ -149,6 +149,7 @@ diagnose item =
 
         CborInt64 sign bs ->
             let
+                arg : String
                 arg =
                     bytesToDiagInt bs
             in
@@ -173,6 +174,7 @@ diagnose item =
 
         CborArray length items ->
             let
+                prefix : String
                 prefix =
                     case length of
                         Definite ->
@@ -181,6 +183,7 @@ diagnose item =
                         Indefinite ->
                             "[_ "
 
+                contents : String
                 contents =
                     String.join ", " (List.map diagnose items)
             in
@@ -188,6 +191,7 @@ diagnose item =
 
         CborMap length entries ->
             let
+                prefix : String
                 prefix =
                     case length of
                         Definite ->
@@ -196,6 +200,7 @@ diagnose item =
                         Indefinite ->
                             "{_ "
 
+                contents : String
                 contents =
                     String.join ", "
                         (List.map (\e -> diagnose e.key ++ ": " ++ diagnose e.value) entries)
@@ -271,6 +276,7 @@ floatToString f =
 
     else
         let
+            s : String
             s =
                 String.fromFloat f
         in
@@ -373,9 +379,11 @@ escapeChar c =
 bytesToDiagInt : Bytes -> String
 bytesToDiagInt bs =
     let
+        len : Int
         len =
             Bytes.width bs
 
+        decoder : Bytes.Decode.Decoder Int
         decoder =
             Bytes.Decode.loop ( len, 0 ) diagIntStep
     in

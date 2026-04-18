@@ -207,9 +207,11 @@ string s =
     Encoder
         (\_ ->
             let
+                encoded : Bytes.Bytes
                 encoded =
                     BE.encode (BE.string s)
 
+                len : Int
                 len =
                     Bytes.width encoded
             in
@@ -302,26 +304,29 @@ stringChunked : List String -> Encoder
 stringChunked chunks =
     Encoder
         (\_ ->
-            let
-                encodeChunk s =
-                    let
-                        encoded =
-                            BE.encode (BE.string s)
-
-                        len =
-                            Bytes.width encoded
-                    in
-                    BE.sequence
-                        [ encodeHeader 3 len
-                        , BE.bytes encoded
-                        ]
-            in
             BE.sequence
                 (BE.unsignedInt8 0x7F
-                    :: List.map encodeChunk chunks
+                    :: List.map encodeStringChunk chunks
                     ++ [ BE.unsignedInt8 0xFF ]
                 )
         )
+
+
+encodeStringChunk : String -> BE.Encoder
+encodeStringChunk s =
+    let
+        encoded : Bytes.Bytes
+        encoded =
+            BE.encode (BE.string s)
+
+        len : Int
+        len =
+            Bytes.width encoded
+    in
+    BE.sequence
+        [ encodeHeader 3 len
+        , BE.bytes encoded
+        ]
 
 
 {-| Encode chunked bytes using indefinite-length encoding (major type 2).
@@ -330,19 +335,20 @@ bytesChunked : List Bytes.Bytes -> Encoder
 bytesChunked chunks =
     Encoder
         (\_ ->
-            let
-                encodeChunk bs =
-                    BE.sequence
-                        [ encodeHeader 2 (Bytes.width bs)
-                        , BE.bytes bs
-                        ]
-            in
             BE.sequence
                 (BE.unsignedInt8 0x5F
-                    :: List.map encodeChunk chunks
+                    :: List.map encodeByteChunk chunks
                     ++ [ BE.unsignedInt8 0xFF ]
                 )
         )
+
+
+encodeByteChunk : Bytes.Bytes -> BE.Encoder
+encodeByteChunk bs =
+    BE.sequence
+        [ encodeHeader 2 (Bytes.width bs)
+        , BE.bytes bs
+        ]
 
 
 
@@ -359,6 +365,7 @@ array items =
     Encoder
         (\strategy ->
             let
+                encodedItems : List BE.Encoder
                 encodedItems =
                     List.map (\(Encoder enc) -> enc strategy) items
             in
@@ -385,13 +392,16 @@ map entries =
     Encoder
         (\strategy ->
             let
+                encodedEntries : List ( Bytes.Bytes, BE.Encoder )
                 encodedEntries =
                     List.map
                         (\( Encoder keyEnc, Encoder valEnc ) ->
                             let
+                                keyBytes : Bytes.Bytes
                                 keyBytes =
                                     BE.encode (keyEnc strategy)
 
+                                entryEncoder : BE.Encoder
                                 entryEncoder =
                                     BE.sequence
                                         [ BE.bytes keyBytes
@@ -402,9 +412,11 @@ map entries =
                         )
                         entries
 
+                sorted : List ( Bytes.Bytes, BE.Encoder )
                 sorted =
                     strategy.sortKeys encodedEntries
 
+                entryEncoders : List BE.Encoder
                 entryEncoders =
                     List.map Tuple.second sorted
             in
@@ -443,6 +455,7 @@ tag t (Encoder enclosedEnc) =
 keyedRecord : (k -> Encoder) -> List ( k, Maybe Encoder ) -> Encoder
 keyedRecord keyEncoder entries =
     let
+        presentEntries : List ( Encoder, Encoder )
         presentEntries =
             List.filterMap
                 (\( k, maybeEnc ) ->
@@ -515,6 +528,7 @@ encodeInt n =
 encodeIntWithWidth : IntWidth -> Int -> BE.Encoder
 encodeIntWithWidth width n =
     let
+        majorType : Int
         majorType =
             if n >= 0 then
                 0
@@ -522,6 +536,7 @@ encodeIntWithWidth width n =
             else
                 1
 
+        arg : Int
         arg =
             if n >= 0 then
                 n
@@ -535,6 +550,7 @@ encodeIntWithWidth width n =
 encodeHeader : Int -> Int -> BE.Encoder
 encodeHeader majorType argument =
     let
+        mt : Int
         mt =
             Bitwise.shiftLeftBy 5 majorType
     in
@@ -562,9 +578,11 @@ encodeHeader majorType argument =
     else
         -- 64-bit: split into two 32-bit halves
         let
+            hi : Int
             hi =
                 argument // 0x0000000100000000
 
+            lo : Int
             lo =
                 argument - hi * 0x0000000100000000
         in
@@ -578,6 +596,7 @@ encodeHeader majorType argument =
 encodeHeaderWithWidth : IntWidth -> Int -> Int -> BE.Encoder
 encodeHeaderWithWidth width majorType argument =
     let
+        mt : Int
         mt =
             Bitwise.shiftLeftBy 5 majorType
     in
@@ -605,9 +624,11 @@ encodeHeaderWithWidth width majorType argument =
 
         IW64 ->
             let
+                hi : Int
                 hi =
                     argument // 0x0000000100000000
 
+                lo : Int
                 lo =
                     argument - hi * 0x0000000100000000
             in
@@ -642,13 +663,11 @@ encodeFloat f =
 float16RoundTrips : Float -> Bool
 float16RoundTrips f =
     let
+        encoded : Bytes.Bytes
         encoded =
-            BE.encode
-                (BE.sequence
-                    [ Bytes.Floating.Encode.float16 Bytes.BE f
-                    ]
-                )
+            BE.encode <| Bytes.Floating.Encode.float16 Bytes.BE f
 
+        decoded : Maybe Float
         decoded =
             Bytes.Decode.decode (Bytes.Floating.Decode.float16 Bytes.BE) encoded
     in
@@ -668,9 +687,11 @@ float16RoundTrips f =
 float32RoundTrips : Float -> Bool
 float32RoundTrips f =
     let
+        encoded : Bytes.Bytes
         encoded =
             BE.encode (BE.float32 Bytes.BE f)
 
+        decoded : Maybe Float
         decoded =
             Bytes.Decode.decode (Bytes.Decode.float32 Bytes.BE) encoded
     in
@@ -694,6 +715,7 @@ encodeItem cborItem =
 
         CborInt64 sign bs ->
             let
+                mt : Int
                 mt =
                     case sign of
                         Positive ->
@@ -729,6 +751,7 @@ encodeItem cborItem =
 
         CborString s ->
             let
+                encoded : Bytes.Bytes
                 encoded =
                     BE.encode (BE.string s)
             in
@@ -743,6 +766,7 @@ encodeItem cborItem =
                     :: List.map
                         (\s ->
                             let
+                                encoded : Bytes.Bytes
                                 encoded =
                                     BE.encode (BE.string s)
                             in
@@ -852,9 +876,11 @@ compareByteKeys ( a, _ ) ( b, _ ) =
 canonicalCompare : ( Bytes.Bytes, a ) -> ( Bytes.Bytes, a ) -> Order
 canonicalCompare ( a, _ ) ( b, _ ) =
     let
+        lenA : Int
         lenA =
             Bytes.width a
 
+        lenB : Int
         lenB =
             Bytes.width b
     in
@@ -869,15 +895,19 @@ canonicalCompare ( a, _ ) ( b, _ ) =
 compareBytes : Bytes.Bytes -> Bytes.Bytes -> Order
 compareBytes a b =
     let
+        lenA : Int
         lenA =
             Bytes.width a
 
+        lenB : Int
         lenB =
             Bytes.width b
 
+        aList : List Int
         aList =
             bytesToList a
 
+        bList : List Int
         bList =
             bytesToList b
     in
@@ -908,9 +938,11 @@ compareByteLists a b lenA lenB =
 bytesToList : Bytes.Bytes -> List Int
 bytesToList bs =
     let
+        len : Int
         len =
             Bytes.width bs
 
+        decoder : Bytes.Decode.Decoder (List Int)
         decoder =
             Bytes.Decode.loop ( len, [] )
                 (\( remaining, acc ) ->

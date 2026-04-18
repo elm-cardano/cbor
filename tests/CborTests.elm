@@ -476,6 +476,7 @@ encodeArrayTests =
         , test "[1..25] (length 25, requires 2-byte header)" <|
             \_ ->
                 let
+                    items : List CE.Encoder
                     items =
                         List.range 1 25 |> List.map CE.int
                 in
@@ -744,10 +745,12 @@ recordBuilderTests =
             \_ ->
                 -- Encode [1.5, 2.5] as CBOR array
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.5, CE.float 2.5 ])
 
+                    decoder : BD.Decoder () String Point
                     decoder =
                         CD.record Point
                             |> CD.element CD.float
@@ -759,10 +762,12 @@ recordBuilderTests =
         , test "optional element present" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0, CE.float 2.0, CE.float 3.0 ])
 
+                    decoder : BD.Decoder () String Point3D
                     decoder =
                         CD.record Point3D
                             |> CD.element CD.float
@@ -775,10 +780,12 @@ recordBuilderTests =
         , test "optional element absent" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0, CE.float 2.0 ])
 
+                    decoder : BD.Decoder () String Point3D
                     decoder =
                         CD.record Point3D
                             |> CD.element CD.float
@@ -791,10 +798,12 @@ recordBuilderTests =
         , test "extra array elements skipped" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0, CE.float 2.0, CE.float 3.0, CE.float 4.0 ])
 
+                    decoder : BD.Decoder () String Point
                     decoder =
                         CD.record Point
                             |> CD.element CD.float
@@ -806,10 +815,12 @@ recordBuilderTests =
         , test "too few elements fails" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0 ])
 
+                    decoder : BD.Decoder () String Point
                     decoder =
                         CD.record Point
                             |> CD.element CD.float
@@ -822,10 +833,12 @@ recordBuilderTests =
         , test "multiple optionals all absent" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.array [ CE.string "localhost", CE.int 8080 ])
 
+                    decoder : BD.Decoder () String Config
                     decoder =
                         CD.record Config
                             |> CD.element CD.string
@@ -839,10 +852,12 @@ recordBuilderTests =
         , test "multiple optionals one present" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.array [ CE.string "localhost", CE.int 8080, CE.bool True ])
 
+                    decoder : BD.Decoder () String Config
                     decoder =
                         CD.record Config
                             |> CD.element CD.string
@@ -882,6 +897,7 @@ keyedRecordBuilderTests =
         [ test "all required fields" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.map
@@ -890,6 +906,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
+                    decoder : BD.Decoder () String Person
                     decoder =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
@@ -901,6 +918,7 @@ keyedRecordBuilderTests =
         , test "optional field present" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.map
@@ -910,6 +928,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
+                    decoder : BD.Decoder () String PersonOptional
                     decoder =
                         CD.keyedRecord CD.int PersonOptional
                             |> CD.required 0 CD.string
@@ -922,6 +941,7 @@ keyedRecordBuilderTests =
         , test "optional field absent" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.map
@@ -930,6 +950,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
+                    decoder : BD.Decoder () String PersonOptional
                     decoder =
                         CD.keyedRecord CD.int PersonOptional
                             |> CD.required 0 CD.string
@@ -942,6 +963,7 @@ keyedRecordBuilderTests =
         , test "stashed key scenario" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.map
@@ -951,6 +973,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
+                    decoder : BD.Decoder () String PersonFull
                     decoder =
                         CD.keyedRecord CD.int PersonFull
                             |> CD.required 0 CD.string
@@ -964,6 +987,7 @@ keyedRecordBuilderTests =
         , test "multiple consecutive absent optionals" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.map
@@ -972,6 +996,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
+                    decoder : BD.Decoder () String DetailedPerson
                     decoder =
                         CD.keyedRecord CD.int DetailedPerson
                             |> CD.required 0 CD.string
@@ -985,6 +1010,7 @@ keyedRecordBuilderTests =
         , test "extra trailing entries skipped" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.map
@@ -994,6 +1020,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
+                    decoder : BD.Decoder () String Person
                     decoder =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
@@ -1005,6 +1032,7 @@ keyedRecordBuilderTests =
         , test "required key mismatch fails" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.map
@@ -1013,6 +1041,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
+                    decoder : BD.Decoder () String Person
                     decoder =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
@@ -1025,6 +1054,7 @@ keyedRecordBuilderTests =
         , test "optional as last step with unmatched key fails" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.map
@@ -1034,6 +1064,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
+                    decoder : BD.Decoder () String PersonOptional
                     decoder =
                         CD.keyedRecord CD.int PersonOptional
                             |> CD.required 0 CD.string
@@ -1060,6 +1091,7 @@ strategyTests =
                 -- Encoded key 1 = 0x01, key 10 = 0x0a
                 -- Lexicographic order: 0x01 < 0x0a -> key 1 before key 10
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.map
@@ -1076,6 +1108,7 @@ strategyTests =
         , test "unsorted preserves insertion order" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.unsorted
                             (CE.map
@@ -1092,6 +1125,7 @@ strategyTests =
         , test "keyedRecord with strategy" <|
             \_ ->
                 let
+                    encoder : CE.Encoder
                     encoder =
                         CE.keyedRecord CE.int
                             [ ( 0, Just (CE.string "Alice") )
@@ -1105,6 +1139,7 @@ strategyTests =
         , test "keyedRecord omits Nothing entries" <|
             \_ ->
                 let
+                    encoder : CE.Encoder
                     encoder =
                         CE.keyedRecord CE.int
                             [ ( 0, Just (CE.string "Alice") )
@@ -1122,6 +1157,7 @@ strategyTests =
                 -- Key B: int 256 -> 0x190100 (3 bytes)
                 -- Deterministic: 0x19 < 0x60 -> int 256 first
                 let
+                    entries : List ( CE.Encoder, CE.Encoder )
                     entries =
                         [ ( CE.string "", CE.int 1 )
                         , ( CE.int 256, CE.int 2 )
@@ -1133,6 +1169,7 @@ strategyTests =
             \_ ->
                 -- Canonical: 1 byte < 3 bytes -> string "" first
                 let
+                    entries : List ( CE.Encoder, CE.Encoder )
                     entries =
                         [ ( CE.string "", CE.int 1 )
                         , ( CE.int 256, CE.int 2 )
@@ -1143,6 +1180,7 @@ strategyTests =
         , test "indefinite map with sorted keys" <|
             \_ ->
                 let
+                    strategy : CE.Strategy
                     strategy =
                         { sortKeys = CE.deterministic.sortKeys
                         , lengthMode = Indefinite
@@ -1363,6 +1401,7 @@ itemDecoderTests =
         , test "CborInt64 round-trip via item" <|
             \_ ->
                 let
+                    hex : String
                     hex =
                         "1b0010000000000001"
                 in
@@ -1542,6 +1581,7 @@ foldEntriesTests =
         [ test "definite map sums values" <|
             \_ ->
                 let
+                    handler : Int -> Int -> BD.Decoder () String Int
                     handler _ acc =
                         CD.int |> BD.map (\v -> acc + v)
                 in
@@ -1556,6 +1596,7 @@ foldEntriesTests =
         , test "indefinite map" <|
             \_ ->
                 let
+                    handler : Int -> Int -> BD.Decoder () String Int
                     handler _ acc =
                         CD.int |> BD.map (\v -> acc + v)
                 in
@@ -1564,6 +1605,7 @@ foldEntriesTests =
         , test "dispatch on keys with unknown skip" <|
             \_ ->
                 let
+                    encoded : Bytes.Bytes
                     encoded =
                         CE.encode CE.deterministic
                             (CE.map
@@ -1573,6 +1615,7 @@ foldEntriesTests =
                                 ]
                             )
 
+                    handler : Int -> Person -> BD.Decoder () String Person
                     handler key acc =
                         case key of
                             0 ->

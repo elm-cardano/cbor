@@ -52,6 +52,7 @@ deduplicateKeys pairs =
 byteRoundTrip : CE.Encoder -> Expect.Expectation
 byteRoundTrip encoder =
     let
+        original : Bytes
         original =
             CE.encode CE.deterministic encoder
     in
@@ -123,9 +124,11 @@ roundTripProperties =
         , fuzz (Fuzz.list (Fuzz.pair Fuzz.int Fuzz.int)) "map of int->int" <|
             \pairs ->
                 let
+                    unique : List ( Int, Int )
                     unique =
                         deduplicateKeys pairs
 
+                    encoder : CE.Encoder
                     encoder =
                         CE.map (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique)
                 in
@@ -165,6 +168,7 @@ byteLevelRoundTripProperties =
           <|
             \hi lo ->
                 let
+                    argBytes : Bytes
                     argBytes =
                         BE.encode
                             (BE.sequence
@@ -173,6 +177,7 @@ byteLevelRoundTripProperties =
                                 ]
                             )
 
+                    encoded : Bytes
                     encoded =
                         CE.encode CE.deterministic (CE.item (CborInt64 Positive argBytes))
                 in
@@ -188,6 +193,7 @@ byteLevelRoundTripProperties =
           <|
             \hi lo ->
                 let
+                    argBytes : Bytes
                     argBytes =
                         BE.encode
                             (BE.sequence
@@ -196,6 +202,7 @@ byteLevelRoundTripProperties =
                                 ]
                             )
 
+                    encoded : Bytes
                     encoded =
                         CE.encode CE.deterministic (CE.item (CborInt64 Negative argBytes))
                 in
@@ -251,9 +258,11 @@ shortestFormProperties =
         , fuzz2 (Fuzz.intRange 0 2147483647) (Fuzz.intRange 0 2147483647) "width monotonic for positives" <|
             \a b ->
                 let
+                    small : Int
                     small =
                         min a b
 
+                    big : Int
                     big =
                         max a b
                 in
@@ -270,6 +279,7 @@ shortestFormProperties =
 lengthEquivalenceProperties : Test
 lengthEquivalenceProperties =
     let
+        indefiniteStrategy : CE.Strategy
         indefiniteStrategy =
             { sortKeys = identity, lengthMode = Indefinite }
     in
@@ -277,9 +287,11 @@ lengthEquivalenceProperties =
         [ fuzz (Fuzz.list Fuzz.int) "array" <|
             \xs ->
                 let
+                    encoder : CE.Encoder
                     encoder =
                         CE.list CE.int xs
 
+                    decoder : BD.Decoder ctx String (List Int)
                     decoder =
                         CD.array CD.int
                 in
@@ -289,15 +301,19 @@ lengthEquivalenceProperties =
         , fuzz (Fuzz.list (Fuzz.pair Fuzz.int Fuzz.int)) "map" <|
             \pairs ->
                 let
+                    unique : List ( Int, Int )
                     unique =
                         deduplicateKeys pairs
 
+                    encoder : CE.Encoder
                     encoder =
                         CE.map (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique)
 
+                    decoder : BD.Decoder ctx String (List ( Int, Int ))
                     decoder =
                         CD.keyValue CD.int CD.int
 
+                    sortResult : Result x (List ( Int, Int )) -> Result x (List ( Int, Int ))
                     sortResult =
                         Result.map (List.sortBy Tuple.first)
                 in
@@ -331,24 +347,31 @@ strategyProperties =
           <|
             \pairs ->
                 let
+                    unique : List ( Int, Int )
                     unique =
                         deduplicateKeys pairs
 
+                    encoder : CE.Encoder
                     encoder =
                         CE.map (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique)
 
+                    decoder : BD.Decoder ctx String (List ( Int, Int ))
                     decoder =
                         CD.keyValue CD.int CD.int
 
+                    sortResult : Result x (List ( Int, Int )) -> Result x (List ( Int, Int ))
                     sortResult =
                         Result.map (List.sortBy Tuple.first)
 
+                    detResult : Result (BD.Error ctx String) (List ( Int, Int ))
                     detResult =
                         sortResult (BD.decode decoder (CE.encode CE.deterministic encoder))
 
+                    canResult : Result (BD.Error ctx String) (List ( Int, Int ))
                     canResult =
                         sortResult (BD.decode decoder (CE.encode CE.canonical encoder))
 
+                    unsResult : Result (BD.Error ctx String) (List ( Int, Int ))
                     unsResult =
                         sortResult (BD.decode decoder (CE.encode CE.unsorted encoder))
                 in
@@ -375,12 +398,15 @@ escapeHatchProperties =
         , fuzz2 Fuzz.int Fuzz.asciiString "sequence is byte concatenation without wrapping" <|
             \n s ->
                 let
+                    seqBytes : Bytes
                     seqBytes =
                         CE.encode CE.deterministic (CE.sequence [ CE.int n, CE.string s ])
 
+                    intBytes : Bytes
                     intBytes =
                         CE.encode CE.deterministic (CE.int n)
 
+                    strBytes : Bytes
                     strBytes =
                         CE.encode CE.deterministic (CE.string s)
                 in
@@ -389,6 +415,7 @@ escapeHatchProperties =
         , fuzz (Fuzz.list Fuzz.bool) "keyedRecord omits Nothing entries" <|
             \presentFlags ->
                 let
+                    entries : List ( Int, Maybe CE.Encoder )
                     entries =
                         List.indexedMap
                             (\i present ->
@@ -402,12 +429,14 @@ escapeHatchProperties =
                             )
                             presentFlags
 
+                    encoded : Bytes
                     encoded =
                         CE.encode CE.deterministic (CE.keyedRecord CE.int entries)
                 in
                 case BD.decode CD.item encoded of
                     Ok (CborMap _ mapEntries) ->
                         let
+                            expectedCount : Int
                             expectedCount =
                                 List.length (List.filter identity presentFlags)
                         in
