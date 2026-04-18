@@ -1,4 +1,8 @@
-module V2Decode exposing (intV2, stringV2, itemV2)
+module V2Decode exposing
+    ( intV2
+    , stringV2
+    , itemV2
+    )
 
 {-| Alternative decoder implementations for benchmarking against Cbor.Decode.
 

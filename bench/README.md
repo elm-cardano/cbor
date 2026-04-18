@@ -298,3 +298,41 @@ Five micro-optimizations applied to `Cbor.Encode` internals.
 
 **V2 adopted** (48% faster). Skips float16 round-trip when `abs f > 65504`.
 Special values (NaN, ±Infinity) bypass the guard.
+
+
+### Decoder optimizations (opportunities 1–3)
+
+Three optimizations applied to `Cbor.Decode` internals.
+
+#### 1. Int decoder: `safeArgument` (merged overflow check)
+
+```
+  dec_int_v1   ████████████████████   106933 ns/run   baseline
+  dec_int_v2   ████████████           62250 ns/run   42% faster
+```
+
+**V2 adopted** (42% faster). Merges overflow check into `safeArgument`;
+for inline/u8/u16/u32 values, no overflow check needed.
+
+#### 2. String decoder: `withArgument` (fused continuation)
+
+```
+  dec_string_v1   ████████████████████   12608 ns/run   baseline
+  dec_string_v2   ████████████           7726 ns/run   39% faster
+```
+
+**V2 adopted** (39% faster). Calls continuation directly for inline args
+instead of `BD.succeed len |> BD.andThen f`.
+
+#### 3. Item decoder: `withArgument` + `BD.repeat`
+
+```
+  dec_item_array_v1   ████████████████████   14903 ns/run   baseline
+  dec_item_array_v2   ███████████████        11444 ns/run   23% faster
+
+  dec_item_map_v1   ████████████████████   25332 ns/run   baseline
+  dec_item_map_v2   ██████████████████     22864 ns/run   10% faster
+```
+
+**V2 adopted** (10-23% faster). Uses `withArgument` across all major types
+and `BD.repeat` for definite-length arrays and maps.

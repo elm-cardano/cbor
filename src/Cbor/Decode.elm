@@ -143,10 +143,15 @@ u32 =
     BD.unsignedInt32 Bytes.BE
 
 
-{-| Decode the CBOR argument from the additional info (low 5 bits).
+{-| Fused `decodeArgument` + overflow check.
+
+For inline values (<=23), returns `BD.succeed` directly (no overflow possible).
+For u8/u16/u32, returns the raw read decoder (no overflow possible).
+Only the 64-bit path retains the `andThen` for the overflow check.
+
 -}
-decodeArgument : Int -> BD.Decoder ctx DecodeError Int
-decodeArgument additionalInfo =
+safeArgument : Int -> BD.Decoder ctx DecodeError Int
+safeArgument additionalInfo =
     if additionalInfo <= 23 then
         BD.succeed additionalInfo
 
@@ -161,6 +166,43 @@ decodeArgument additionalInfo =
 
     else if additionalInfo == 27 then
         BD.map2 (\hi lo -> hi * 0x0000000100000000 + lo) u32 u32
+            |> BD.andThen
+                (\n ->
+                    if n > maxSafeInt then
+                        BD.fail IntegerOverflow
+
+                    else
+                        BD.succeed n
+                )
+
+    else
+        BD.fail (ReservedAdditionalInfo additionalInfo)
+
+
+{-| Fused `decodeArgument` + continuation.
+
+For inline arguments (<=23), calls `f` directly — no intermediate
+`BD.succeed` + `BD.andThen`. For multi-byte arguments, composes via
+`BD.andThen` as before.
+
+-}
+withArgument : Int -> (Int -> BD.Decoder ctx DecodeError a) -> BD.Decoder ctx DecodeError a
+withArgument additionalInfo f =
+    if additionalInfo <= 23 then
+        f additionalInfo
+
+    else if additionalInfo == 24 then
+        u8 |> BD.andThen f
+
+    else if additionalInfo == 25 then
+        u16 |> BD.andThen f
+
+    else if additionalInfo == 26 then
+        u32 |> BD.andThen f
+
+    else if additionalInfo == 27 then
+        BD.map2 (\hi lo -> hi * 0x0000000100000000 + lo) u32 u32
+            |> BD.andThen f
 
     else
         BD.fail (ReservedAdditionalInfo additionalInfo)
@@ -256,26 +298,11 @@ int =
                         Bitwise.and 0x1F initialByte
                 in
                 if majorType == 0 then
-                    decodeArgument additionalInfo
-                        |> BD.andThen
-                            (\n ->
-                                if n > maxSafeInt then
-                                    BD.fail IntegerOverflow
-
-                                else
-                                    BD.succeed n
-                            )
+                    safeArgument additionalInfo
 
                 else if majorType == 1 then
-                    decodeArgument additionalInfo
-                        |> BD.andThen
-                            (\n ->
-                                if n > maxSafeInt then
-                                    BD.fail IntegerOverflow
-
-                                else
-                                    BD.succeed (-1 - n)
-                            )
+                    safeArgument additionalInfo
+                        |> BD.map (\n -> -1 - n)
 
                 else
                     BD.fail (WrongMajorType { expected = 0, got = majorType })
@@ -311,20 +338,19 @@ bigInt =
                         |> BD.map (\bs -> ( Negative, bs ))
 
                 else if majorType == 6 then
-                    decodeArgument additionalInfo
-                        |> BD.andThen
-                            (\tagNum ->
-                                if tagNum == 2 then
-                                    decodeBytesRaw
-                                        |> BD.map (\bs -> ( Positive, bs ))
+                    withArgument additionalInfo
+                        (\tagNum ->
+                            if tagNum == 2 then
+                                decodeBytesRaw
+                                    |> BD.map (\bs -> ( Positive, bs ))
 
-                                else if tagNum == 3 then
-                                    decodeBytesRaw
-                                        |> BD.map (\bs -> ( Negative, bs ))
+                            else if tagNum == 3 then
+                                decodeBytesRaw
+                                    |> BD.map (\bs -> ( Negative, bs ))
 
-                                else
-                                    BD.fail (WrongTag { expected = 2, got = tagNum })
-                            )
+                            else
+                                BD.fail (WrongTag { expected = 2, got = tagNum })
+                        )
 
                 else
                     BD.fail (WrongMajorType { expected = 0, got = majorType })
@@ -433,21 +459,15 @@ string =
                                                 BD.succeed (BD.Done (String.concat (List.reverse chunks)))
 
                                             else
-                                                let
-                                                    chunkAI : Int
-                                                    chunkAI =
-                                                        Bitwise.and 0x1F byte
-                                                in
-                                                decodeArgument chunkAI
-                                                    |> BD.andThen (\len -> BD.string len)
+                                                withArgument (Bitwise.and 0x1F byte)
+                                                    (\len -> BD.string len)
                                                     |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
                                         )
                             )
                             []
 
                     else
-                        decodeArgument additionalInfo
-                            |> BD.andThen (\len -> BD.string len)
+                        withArgument additionalInfo (\len -> BD.string len)
             )
 
 
@@ -485,21 +505,15 @@ bytes =
                                                 BD.succeed (BD.Done (concatBytes (List.reverse chunks)))
 
                                             else
-                                                let
-                                                    chunkAI : Int
-                                                    chunkAI =
-                                                        Bitwise.and 0x1F byte
-                                                in
-                                                decodeArgument chunkAI
-                                                    |> BD.andThen (\len -> BD.bytes len)
+                                                withArgument (Bitwise.and 0x1F byte)
+                                                    (\len -> BD.bytes len)
                                                     |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
                                         )
                             )
                             []
 
                     else
-                        decodeArgument additionalInfo
-                            |> BD.andThen (\len -> BD.bytes len)
+                        withArgument additionalInfo (\len -> BD.bytes len)
             )
 
 
@@ -522,8 +536,7 @@ decodeBytesRaw =
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
-                    decodeArgument additionalInfo
-                        |> BD.andThen (\len -> BD.bytes len)
+                    withArgument additionalInfo (\len -> BD.bytes len)
             )
 
 
@@ -566,8 +579,7 @@ array elementDecoder =
                             []
 
                     else
-                        decodeArgument additionalInfo
-                            |> BD.andThen (\count -> BD.repeat elementDecoder count)
+                        withArgument additionalInfo (\count -> BD.repeat elementDecoder count)
             )
 
 
@@ -607,11 +619,10 @@ keyValue keyDecoder valueDecoder =
                             []
 
                     else
-                        decodeArgument additionalInfo
-                            |> BD.andThen
-                                (\count ->
-                                    BD.repeat (BD.map2 Tuple.pair keyDecoder valueDecoder) count
-                                )
+                        withArgument additionalInfo
+                            (\count ->
+                                BD.repeat (BD.map2 Tuple.pair keyDecoder valueDecoder) count
+                            )
             )
 
 
@@ -679,21 +690,20 @@ foldEntries keyDecoder handler initialAcc =
                             initialAcc
 
                     else
-                        decodeArgument additionalInfo
-                            |> BD.andThen
-                                (\count ->
-                                    BD.loop
-                                        (\( remaining, acc ) ->
-                                            if remaining <= 0 then
-                                                BD.succeed (BD.Done acc)
+                        withArgument additionalInfo
+                            (\count ->
+                                BD.loop
+                                    (\( remaining, acc ) ->
+                                        if remaining <= 0 then
+                                            BD.succeed (BD.Done acc)
 
-                                            else
-                                                keyDecoder
-                                                    |> BD.andThen (\key -> handler key acc)
-                                                    |> BD.map (\newAcc -> BD.Loop ( remaining - 1, newAcc ))
-                                        )
-                                        ( count, initialAcc )
-                                )
+                                        else
+                                            keyDecoder
+                                                |> BD.andThen (\key -> handler key acc)
+                                                |> BD.map (\newAcc -> BD.Loop ( remaining - 1, newAcc ))
+                                    )
+                                    ( count, initialAcc )
+                            )
             )
 
 
@@ -721,15 +731,14 @@ tag expectedTag innerDecoder =
                         additionalInfo =
                             Bitwise.and 0x1F initialByte
                     in
-                    decodeArgument additionalInfo
-                        |> BD.andThen
-                            (\tagNum ->
-                                if tagNum == tagToInt expectedTag then
-                                    innerDecoder
+                    withArgument additionalInfo
+                        (\tagNum ->
+                            if tagNum == tagToInt expectedTag then
+                                innerDecoder
 
-                                else
-                                    BD.fail (WrongTag { expected = tagToInt expectedTag, got = tagNum })
-                            )
+                            else
+                                BD.fail (WrongTag { expected = tagToInt expectedTag, got = tagNum })
+                        )
             )
 
 
@@ -763,8 +772,7 @@ arrayHeader =
                         BD.succeed Nothing
 
                     else
-                        decodeArgument additionalInfo
-                            |> BD.map Just
+                        withArgument additionalInfo (Just >> BD.succeed)
             )
 
 
@@ -794,8 +802,7 @@ mapHeader =
                         BD.succeed Nothing
 
                     else
-                        decodeArgument additionalInfo
-                            |> BD.map Just
+                        withArgument additionalInfo (Just >> BD.succeed)
             )
 
 
@@ -1136,16 +1143,15 @@ decodeItemBody initialByte =
                                         BD.succeed (BD.Done (CborByteStringChunked (List.reverse chunks)))
 
                                     else
-                                        decodeArgument (Bitwise.and 0x1F byte)
-                                            |> BD.andThen (\len -> BD.bytes len)
+                                        withArgument (Bitwise.and 0x1F byte)
+                                            (\len -> BD.bytes len)
                                             |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
                                 )
                     )
                     []
 
             else
-                decodeArgument additionalInfo
-                    |> BD.andThen (\len -> BD.bytes len)
+                withArgument additionalInfo (\len -> BD.bytes len)
                     |> BD.map CborByteString
 
         3 ->
@@ -1160,16 +1166,15 @@ decodeItemBody initialByte =
                                         BD.succeed (BD.Done (CborStringChunked (List.reverse chunks)))
 
                                     else
-                                        decodeArgument (Bitwise.and 0x1F byte)
-                                            |> BD.andThen (\len -> BD.string len)
+                                        withArgument (Bitwise.and 0x1F byte)
+                                            (\len -> BD.string len)
                                             |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
                                 )
                     )
                     []
 
             else
-                decodeArgument additionalInfo
-                    |> BD.andThen (\len -> BD.string len)
+                withArgument additionalInfo (\len -> BD.string len)
                     |> BD.map CborString
 
         4 ->
@@ -1191,20 +1196,11 @@ decodeItemBody initialByte =
                     []
 
             else
-                decodeArgument additionalInfo
-                    |> BD.andThen
-                        (\count ->
-                            BD.loop
-                                (\( remaining, acc ) ->
-                                    if remaining <= 0 then
-                                        BD.succeed (BD.Done (CborArray Definite (List.reverse acc)))
-
-                                    else
-                                        item
-                                            |> BD.map (\v -> BD.Loop ( remaining - 1, v :: acc ))
-                                )
-                                ( count, [] )
-                        )
+                withArgument additionalInfo
+                    (\count ->
+                        BD.repeat item count
+                            |> BD.map (\items -> CborArray Definite items)
+                    )
 
         5 ->
             -- Map
@@ -1227,31 +1223,19 @@ decodeItemBody initialByte =
                     []
 
             else
-                decodeArgument additionalInfo
-                    |> BD.andThen
-                        (\count ->
-                            BD.loop
-                                (\( remaining, acc ) ->
-                                    if remaining <= 0 then
-                                        BD.succeed (BD.Done (CborMap Definite (List.reverse acc)))
-
-                                    else
-                                        BD.map2
-                                            (\k v -> BD.Loop ( remaining - 1, { key = k, value = v } :: acc ))
-                                            item
-                                            item
-                                )
-                                ( count, [] )
-                        )
+                withArgument additionalInfo
+                    (\count ->
+                        BD.repeat (BD.map2 (\k v -> { key = k, value = v }) item item) count
+                            |> BD.map (\entries -> CborMap Definite entries)
+                    )
 
         6 ->
             -- Tag
-            decodeArgument additionalInfo
-                |> BD.andThen
-                    (\tagNum ->
-                        item
-                            |> BD.map (\enclosed -> CborTag (intToTag tagNum) enclosed)
-                    )
+            withArgument additionalInfo
+                (\tagNum ->
+                    item
+                        |> BD.map (\enclosed -> CborTag (intToTag tagNum) enclosed)
+                )
 
         7 ->
             -- Simple values and floats
