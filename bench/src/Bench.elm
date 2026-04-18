@@ -607,12 +607,12 @@ dec_item_array100 () =
 
 enc_direct_list100 : () -> Bytes
 enc_direct_list100 () =
-    CE.encode CE.deterministic listEncoder100
+    CE.encode CE.unsorted listEncoder100
 
 
 enc_item_list100 : () -> Bytes
 enc_item_list100 () =
-    CE.encode CE.deterministic listItemEncoder100
+    CE.encode CE.unsorted listItemEncoder100
 
 
 
@@ -628,22 +628,22 @@ enc_item_list100 () =
 
 enc_float_f16_1000 : () -> Bytes
 enc_float_f16_1000 () =
-    CE.encode CE.deterministic (CE.list CE.float float16Values)
+    CE.encode CE.unsorted (CE.list CE.float float16Values)
 
 
 enc_float_f32_1000 : () -> Bytes
 enc_float_f32_1000 () =
-    CE.encode CE.deterministic (CE.list CE.float float32Values)
+    CE.encode CE.unsorted (CE.list CE.float float32Values)
 
 
 enc_float_f64_1000 : () -> Bytes
 enc_float_f64_1000 () =
-    CE.encode CE.deterministic (CE.list CE.float float64Values)
+    CE.encode CE.unsorted (CE.list CE.float float64Values)
 
 
 enc_float_explicit64_1000 : () -> Bytes
 enc_float_explicit64_1000 () =
-    CE.encode CE.deterministic (CE.list (\f -> CE.floatWithWidth FW64 f) float64Values)
+    CE.encode CE.unsorted (CE.list (\f -> CE.floatWithWidth FW64 f) float64Values)
 
 
 
