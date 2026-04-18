@@ -29,22 +29,22 @@ Measures `compareBytes` cost during sorted map encoding.
 
 ## Int keys
 
-    elm - bench -f Bench.enc_map_unsorted_10 -f Bench.enc_map_deterministic_10 -f Bench.enc_map_canonical_10 "()"
+```sh
+elm-bench -f Bench.enc_map_unsorted_10 -f Bench.enc_map_deterministic_10 -f Bench.enc_map_canonical_10 "()"
+elm-bench -f Bench.enc_map_unsorted_100 -f Bench.enc_map_deterministic_100 -f Bench.enc_map_canonical_100 "()"
+elm-bench -f Bench.enc_map_unsorted_1000 -f Bench.enc_map_deterministic_1000 -f Bench.enc_map_canonical_1000 "()"
+```
 
 @docs enc_map_unsorted_10, enc_map_deterministic_10, enc_map_canonical_10
-
-    elm - bench -f Bench.enc_map_unsorted_100 -f Bench.enc_map_deterministic_100 -f Bench.enc_map_canonical_100 "()"
-
 @docs enc_map_unsorted_100, enc_map_deterministic_100, enc_map_canonical_100
-
-    elm - bench -f Bench.enc_map_unsorted_1000 -f Bench.enc_map_deterministic_1000 -f Bench.enc_map_canonical_1000 "()"
-
 @docs enc_map_unsorted_1000, enc_map_deterministic_1000, enc_map_canonical_1000
 
 
 ## 32-char string keys
 
-    elm - bench -f Bench.enc_map_unsorted_str100 -f Bench.enc_map_deterministic_str100 -f Bench.enc_map_canonical_str100 "()"
+```sh
+elm-bench -f Bench.enc_map_unsorted_str100 -f Bench.enc_map_deterministic_str100 -f Bench.enc_map_canonical_str100 "()"
+```
 
 @docs enc_map_unsorted_str100, enc_map_deterministic_str100, enc_map_canonical_str100
 
@@ -54,12 +54,12 @@ Measures `compareBytes` cost during sorted map encoding.
 Validates the core "Performance Rationale" claim: direct combinators skip the
 intermediate `CborItem` tree.
 
-    elm - bench -f Bench.dec_direct_array100 -f Bench.dec_item_array100 "()"
+```sh
+elm-bench -f Bench.dec_direct_array100 -f Bench.dec_item_array100 "()"
+elm-bench -f Bench.enc_direct_list100 -f Bench.enc_item_list100 "()"
+```
 
 @docs dec_direct_array100, dec_item_array100
-
-    elm - bench -f Bench.enc_direct_list100 -f Bench.enc_item_list100 "()"
-
 @docs enc_direct_list100, enc_item_list100
 
 
@@ -67,7 +67,9 @@ intermediate `CborItem` tree.
 
 The encoder tries float16, then float32, then float64 (up to 3 roundtrip checks per float).
 
-    elm - bench -f Bench.enc_float_f16_1000 -f Bench.enc_float_f32_1000 -f Bench.enc_float_f64_1000 -f Bench.enc_float_explicit64_1000 "()"
+```sh
+elm-bench -f Bench.enc_float_f16_1000 -f Bench.enc_float_f32_1000 -f Bench.enc_float_f64_1000 -f Bench.enc_float_explicit64_1000 "()"
+```
 
 @docs enc_float_f16_1000, enc_float_f32_1000, enc_float_f64_1000, enc_float_explicit64_1000
 
@@ -81,7 +83,9 @@ The encoder tries float16, then float32, then float64 (up to 3 roundtrip checks 
 
 `first` hits branch 1 (no backtracking); `last` hits branch 5 (4 failed attempts).
 
-    elm - bench -f Bench.dec_oneOf_flat_first -f Bench.dec_oneOf_flat_last "()"
+```sh
+elm-bench -f Bench.dec_oneOf_flat_first -f Bench.dec_oneOf_flat_last "()"
+```
 
 @docs dec_oneOf_flat_first, dec_oneOf_flat_last
 
@@ -91,7 +95,9 @@ The encoder tries float16, then float32, then float64 (up to 3 roundtrip checks 
 Recursive 5-branch `oneOf` on nested arrays wrapping an int.
 Each nesting level adds 2 backtracks (constr + map fail before array matches).
 
-    elm - bench -f Bench.dec_oneOf_nested_1 -f Bench.dec_oneOf_nested_5 -f Bench.dec_oneOf_nested_10 "()"
+```sh
+elm-bench -f Bench.dec_oneOf_nested_1 -f Bench.dec_oneOf_nested_5 -f Bench.dec_oneOf_nested_10 "()"
+```
 
 @docs dec_oneOf_nested_1, dec_oneOf_nested_5, dec_oneOf_nested_10
 
@@ -101,16 +107,14 @@ Each nesting level adds 2 backtracks (constr + map fail before array matches).
 `builder` = `CD.record` + `CD.element` pipeline (tracks remaining counter).
 `manual` = `CD.arrayHeader` + `BD.keep` pipeline (no counter).
 
-    elm - bench -f Bench.dec_record_3_builder -f Bench.dec_record_3_manual "()"
+```sh
+elm-bench -f Bench.dec_record_3_builder -f Bench.dec_record_3_manual "()"
+elm-bench -f Bench.dec_record_10_builder -f Bench.dec_record_10_manual "()"
+elm-bench -f Bench.dec_record_30_array "()"
+```
 
 @docs dec_record_3_builder, dec_record_3_manual
-
-    elm - bench -f Bench.dec_record_10_builder -f Bench.dec_record_10_manual "()"
-
 @docs dec_record_10_builder, dec_record_10_manual
-
-    elm - bench -f Bench.dec_record_30_array "()"
-
 @docs dec_record_30_array
 
 
@@ -120,16 +124,14 @@ Each nesting level adds 2 backtracks (constr + map fail before array matches).
 `fold` = `CD.foldEntries` (simple accumulator loop).
 `keyValue` = `CD.keyValue` (pair decoder loop).
 
-    elm - bench -f Bench.dec_keyed_3_builder -f Bench.dec_keyed_3_fold "()"
+```sh
+elm-bench -f Bench.dec_keyed_3_builder -f Bench.dec_keyed_3_fold "()"
+elm-bench -f Bench.dec_keyed_10_builder -f Bench.dec_keyed_10_fold "()"
+elm-bench -f Bench.dec_keyed_30_keyValue -f Bench.dec_keyed_30_fold "()"
+```
 
 @docs dec_keyed_3_builder, dec_keyed_3_fold
-
-    elm - bench -f Bench.dec_keyed_10_builder -f Bench.dec_keyed_10_fold "()"
-
 @docs dec_keyed_10_builder, dec_keyed_10_fold
-
-    elm - bench -f Bench.dec_keyed_30_keyValue -f Bench.dec_keyed_30_fold "()"
-
 @docs dec_keyed_30_keyValue, dec_keyed_30_fold
 
 -}
