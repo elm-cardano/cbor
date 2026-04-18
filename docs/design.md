@@ -94,6 +94,7 @@ type Sign
 ```
 
 For CborInt64, the mapping to values is:
+
 - `CborInt64 Positive bytes`: value = argument (decoded from bytes)
 - `CborInt64 Negative bytes`: value = -1 - argument (decoded from bytes)
 
@@ -106,6 +107,7 @@ Elm has no float16 type, but decode/encode only requires converting between 16-b
 ### Simple Values
 
 `CborSimple SimpleWidth Int` covers CBOR simple values in the range 0-255, excluding:
+
 - 20 (false) → `CborBool False`
 - 21 (true) → `CborBool True`
 - 22 (null) → `CborNull`
@@ -143,6 +145,7 @@ Named variants for well-known IANA-registered tags. `Unknown Int` as the catch-a
 ### Map Representation
 
 Maps use `List { key : CborItem, value : CborItem }` rather than `Dict`:
+
 - CBOR map keys can be any type, not just `comparable`
 - Preserves insertion order, which matters for round-tripping and deterministic encoding
 - Record fields (`key`, `value`) are more readable than tuples
@@ -270,12 +273,12 @@ Primitive combinators always use shortest encoding (all canonical forms agree on
 
 **Key sorting approaches** (from RFC 7049, RFC 8949, and CTAP2):
 
-| Strategy | Sort rule | Specified in |
-|----------|-----------|-------------|
-| `deterministic` | Lexicographic on encoded key bytes | RFC 8949 §4.2.1 |
-| `canonical` | Shorter keys first, then lexicographic within same length | RFC 7049 / RFC 8949 §4.2.3 |
-| `ctap2` | Group by major type, then shorter first, then lexicographic | CTAP2 (FIDO) |
-| `unsorted` | Preserve insertion order | — |
+| Strategy        | Sort rule                                                   | Specified in               |
+| --------------- | ----------------------------------------------------------- | -------------------------- |
+| `deterministic` | Lexicographic on encoded key bytes                          | RFC 8949 §4.2.1            |
+| `canonical`     | Shorter keys first, then lexicographic within same length   | RFC 7049 / RFC 8949 §4.2.3 |
+| `ctap2`         | Group by major type, then shorter first, then lexicographic | CTAP2 (FIDO)               |
+| `unsorted`      | Preserve insertion order                                    | —                          |
 
 **Predefined strategies:**
 
@@ -626,13 +629,13 @@ decodePerson =
 
 **Trace — optional field absent** (`{ 0: "Alice", 1: 30, 3: true }`, 3 entries):
 
-| Step | Stream after | remaining | pendingKey | value |
-|------|-------------|-----------|------------|-------|
-| start | `[k0,v0,k1,v1,k3,v3]` | 3 | Nothing | `Person` |
-| required 0 | `[k1,v1,k3,v3]` | 2 | Nothing | `Person "Alice"` |
-| required 1 | `[k3,v3]` | 1 | Nothing | `Person "Alice" 30` |
-| optional 2 | `[v3]` | 1 | Just 3 | `Person "Alice" 30 ""` |
-| required 3 | `[]` | 0 | Nothing | `Person "Alice" 30 "" True` |
+| Step       | Stream after          | remaining | pendingKey | value                       |
+| ---------- | --------------------- | --------- | ---------- | --------------------------- |
+| start      | `[k0,v0,k1,v1,k3,v3]` | 3         | Nothing    | `Person`                    |
+| required 0 | `[k1,v1,k3,v3]`       | 2         | Nothing    | `Person "Alice"`            |
+| required 1 | `[k3,v3]`             | 1         | Nothing    | `Person "Alice" 30`         |
+| optional 2 | `[v3]`                | 1         | Just 3     | `Person "Alice" 30 ""`      |
+| required 3 | `[]`                  | 0         | Nothing    | `Person "Alice" 30 "" True` |
 
 `optional 2` reads key 3, no match, stashes it. `required 3` uses the stashed key, only reads the value. Total consumed entries (3) equals header count (3).
 
@@ -842,14 +845,14 @@ decodePlutusData =
 
 Several types accept multiple CBOR shapes for the same semantic value. In every case in this CDDL, the variants differ by major type, so `oneOf` fails fast on the first byte:
 
-| Type | Variants |
-|------|----------|
+| Type                                         | Variants                                     |
+| -------------------------------------------- | -------------------------------------------- |
 | `set<a0>` / `nonempty_set` / `nonempty_oset` | tag 258 + array (mt 6) vs plain array (mt 4) |
-| `transaction_output` | array (mt 4) vs map (mt 5) |
-| `redeemers` | array (mt 4) vs map (mt 5) |
-| `auxiliary_data` | map (mt 5) vs array (mt 4) vs tag 259 (mt 6) |
-| `value` | uint (mt 0) vs array (mt 4) |
-| `big_int` | int (mt 0/1) vs tag (mt 6) |
+| `transaction_output`                         | array (mt 4) vs map (mt 5)                   |
+| `redeemers`                                  | array (mt 4) vs map (mt 5)                   |
+| `auxiliary_data`                             | map (mt 5) vs array (mt 4) vs tag 259 (mt 6) |
+| `value`                                      | uint (mt 0) vs array (mt 4)                  |
+| `big_int`                                    | int (mt 0/1) vs tag (mt 6)                   |
 
 Approach: `oneOf` with each encoding as a branch. Since major types differ, the first byte is enough to reject a wrong branch — backtracking cost is one byte.
 
