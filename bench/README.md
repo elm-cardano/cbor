@@ -88,6 +88,54 @@ elm-bench -f Bench.dec_keyed_30_keyValue -f Bench.dec_keyed_30_fold "()"
 ```
 
 
+### 9. String encoding — avoid intermediate buffer
+
+V1 encodes the string to a temporary `Bytes` to measure UTF-8 length,
+then copies. V2 uses `BE.getStringWidth` and writes directly. V2b adds
+packed header (#2) on top.
+
+```sh
+elm-bench -f BenchOptimize.enc_string_v1 -f BenchOptimize.enc_string_v2 -f BenchOptimize.enc_string_v2b "()"
+```
+
+### 10. Header packing for argument 24–255
+
+For CBOR headers with argument 24–255 (e.g. 32-byte hashes), V1 emits
+`sequence [U8, U8]` (6 allocations). V2 packs into a single `U16` (1 allocation).
+
+```sh
+elm-bench -f BenchOptimize.enc_header_v1 -f BenchOptimize.enc_header_v2 "()"
+```
+
+### 11. Break appending — `++ [break]` vs nested sequence
+
+In indefinite-length mode, V1 appends the break byte with `++` (O(N)).
+V2 wraps items in a nested `sequence` (O(1)).
+
+```sh
+elm-bench -f BenchOptimize.enc_indef_v1_100 -f BenchOptimize.enc_indef_v2_100 "()"
+elm-bench -f BenchOptimize.enc_indef_v1_1000 -f BenchOptimize.enc_indef_v2_1000 "()"
+```
+
+### 12. Map entries — `List.concatMap` vs `List.foldr`
+
+In `encodeItem CborMap`, V1 uses `List.concatMap` (N intermediate 2-element
+lists). V2 uses `List.foldr` (direct cons).
+
+```sh
+elm-bench -f BenchOptimize.enc_mapfold_v1_100 -f BenchOptimize.enc_mapfold_v2_100 "()"
+```
+
+### 13. Float fast-reject — range guard before float16 round-trip
+
+V1 always runs the float16 round-trip check. V2 skips it when
+`abs f > 65504` (float16 max). Test data: large float64 values.
+
+```sh
+elm-bench -f BenchOptimize.enc_guard_v1 -f BenchOptimize.enc_guard_v2 "()"
+```
+
+
 ## Optimization results
 
 ### Key sorting: `compareBytes` (V1 -> V5)

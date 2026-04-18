@@ -3,6 +3,11 @@ module V2 exposing
     , deterministicV3
     , deterministicV5
     , floatV2
+    , stringBEv1, stringBEv2, stringBEv2b
+    , bytesWithHeaderV1, bytesWithHeaderV2
+    , arrayIndefiniteV1, arrayIndefiniteV2
+    , mapIntV1, mapIntV2
+    , floatV3
     )
 
 {-| Alternative implementations for benchmarking against Cbor.Encode internals.
@@ -52,8 +57,50 @@ instead of 2). If float32 succeeds, then check float16.
 
 @docs floatV2
 
+
+# Opportunity 1: String encoding without intermediate buffer
+
+V1 encodes the string to a temporary `Bytes`, measures its width, then
+copies the bytes. V2 uses `BE.getStringWidth` (pure arithmetic) and
+feeds the string directly to `BE.string`.
+
+@docs stringBEv1, stringBEv2, stringBEv2b
+
+
+# Opportunity 2: Header packing for argument 24–255
+
+V1 uses `BE.sequence [U8, U8]` (6 heap allocations). V2 packs both bytes
+into a single `BE.unsignedInt16` (1 allocation).
+
+@docs bytesWithHeaderV1, bytesWithHeaderV2
+
+
+# Opportunity 3: Break appending in indefinite-length mode
+
+V1 uses `++ [break]` which traverses the entire item list (O(N)).
+V2 uses a nested `BE.sequence` which is O(1).
+
+@docs arrayIndefiniteV1, arrayIndefiniteV2
+
+
+# Opportunity 4: concatMap → foldr in map entry encoding
+
+V1 uses `List.concatMap` (allocates N intermediate 2-element lists).
+V2 uses `List.foldr` (builds the flat list directly).
+
+@docs mapIntV1, mapIntV2
+
+
+# Opportunity 5: Float fast-reject guard
+
+V3 adds `abs f <= 65504` before the float16 round-trip check, skipping
+the expensive allocation for values that can never be float16.
+
+@docs floatV3
+
 -}
 
+import Bitwise
 import Bytes exposing (Bytes)
 import Bytes.Decode
 import Bytes.Encode as BE
@@ -281,3 +328,262 @@ float32RoundTrips f =
 
         Nothing ->
             False
+
+
+
+-- ============================================================================
+-- OPPORTUNITY #1: STRING ENCODING — AVOID INTERMEDIATE BUFFER
+-- ============================================================================
+
+
+{-| V1: current string encoding (encode to Bytes, measure width, copy).
+
+Allocates an intermediate `ArrayBuffer` + `DataView`, writes the string once
+into the temporary buffer, then copies the bytes into the final buffer.
+
+-}
+stringBEv1 : String -> BE.Encoder
+stringBEv1 s =
+    let
+        encoded : Bytes
+        encoded =
+            BE.encode (BE.string s)
+
+        len : Int
+        len =
+            Bytes.width encoded
+    in
+    BE.sequence
+        [ encodeHeaderLocal 3 len
+        , BE.bytes encoded
+        ]
+
+
+{-| V2: use `getStringWidth` to measure UTF-8 length without encoding.
+
+Eliminates the intermediate buffer allocation and the copy. The string is
+written directly into the final buffer by `BE.string`.
+
+-}
+stringBEv2 : String -> BE.Encoder
+stringBEv2 s =
+    let
+        len : Int
+        len =
+            BE.getStringWidth s
+    in
+    BE.sequence
+        [ encodeHeaderLocal 3 len
+        , BE.string s
+        ]
+
+
+{-| V2b: `getStringWidth` + packed header (opportunities #1 + #2 combined).
+-}
+stringBEv2b : String -> BE.Encoder
+stringBEv2b s =
+    let
+        len : Int
+        len =
+            BE.getStringWidth s
+    in
+    BE.sequence
+        [ encodeHeaderPacked 3 len
+        , BE.string s
+        ]
+
+
+
+-- ============================================================================
+-- OPPORTUNITY #2: HEADER PACKING FOR ARGUMENT 24–255
+-- ============================================================================
+
+
+{-| V1: current header encoding (copy of `Cbor.Encode.encodeHeader`).
+
+For argument 24–255, emits `BE.sequence [U8, U8]` — a `Seq` constructor,
+2 cons cells, nil, and 2 `U8` constructors = 6 heap allocations.
+
+-}
+encodeHeaderLocal : Int -> Int -> BE.Encoder
+encodeHeaderLocal majorType argument =
+    let
+        mt : Int
+        mt =
+            Bitwise.shiftLeftBy 5 majorType
+    in
+    if argument <= 23 then
+        BE.unsignedInt8 (mt + argument)
+
+    else if argument <= 0xFF then
+        BE.sequence
+            [ BE.unsignedInt8 (mt + 24)
+            , BE.unsignedInt8 argument
+            ]
+
+    else if argument <= 0xFFFF then
+        BE.sequence
+            [ BE.unsignedInt8 (mt + 25)
+            , BE.unsignedInt16 Bytes.BE argument
+            ]
+
+    else
+        BE.sequence
+            [ BE.unsignedInt8 (mt + 26)
+            , BE.unsignedInt32 Bytes.BE argument
+            ]
+
+
+{-| V2: packed header for argument 24–255 (single `unsignedInt16`).
+
+Packs the initial byte and argument into one `U16` write, reducing
+6 heap allocations to 1. Other branches are unchanged.
+
+-}
+encodeHeaderPacked : Int -> Int -> BE.Encoder
+encodeHeaderPacked majorType argument =
+    let
+        mt : Int
+        mt =
+            Bitwise.shiftLeftBy 5 majorType
+    in
+    if argument <= 23 then
+        BE.unsignedInt8 (mt + argument)
+
+    else if argument <= 0xFF then
+        BE.unsignedInt16 Bytes.BE
+            (Bitwise.or (Bitwise.shiftLeftBy 8 (mt + 24)) argument)
+
+    else if argument <= 0xFFFF then
+        BE.sequence
+            [ BE.unsignedInt8 (mt + 25)
+            , BE.unsignedInt16 Bytes.BE argument
+            ]
+
+    else
+        BE.sequence
+            [ BE.unsignedInt8 (mt + 26)
+            , BE.unsignedInt32 Bytes.BE argument
+            ]
+
+
+{-| V1: byte string encoding with current header.
+-}
+bytesWithHeaderV1 : Bytes -> BE.Encoder
+bytesWithHeaderV1 bs =
+    BE.sequence
+        [ encodeHeaderLocal 2 (Bytes.width bs)
+        , BE.bytes bs
+        ]
+
+
+{-| V2: byte string encoding with packed header.
+-}
+bytesWithHeaderV2 : Bytes -> BE.Encoder
+bytesWithHeaderV2 bs =
+    BE.sequence
+        [ encodeHeaderPacked 2 (Bytes.width bs)
+        , BE.bytes bs
+        ]
+
+
+
+-- ============================================================================
+-- OPPORTUNITY #3: BREAK APPENDING IN INDEFINITE-LENGTH MODE
+-- ============================================================================
+
+
+{-| V1: indefinite-length array with `++ [break]` — O(N) list append.
+-}
+arrayIndefiniteV1 : List BE.Encoder -> BE.Encoder
+arrayIndefiniteV1 items =
+    BE.sequence
+        (BE.unsignedInt8 0x9F
+            :: items
+            ++ [ BE.unsignedInt8 0xFF ]
+        )
+
+
+{-| V2: indefinite-length array with nested `sequence` — O(1).
+
+The extra `Seq` node is trivial compared to the O(N) list copy.
+
+-}
+arrayIndefiniteV2 : List BE.Encoder -> BE.Encoder
+arrayIndefiniteV2 items =
+    BE.sequence
+        [ BE.unsignedInt8 0x9F
+        , BE.sequence items
+        , BE.unsignedInt8 0xFF
+        ]
+
+
+
+-- ============================================================================
+-- OPPORTUNITY #4: CONCATMAP → FOLDR IN MAP ENTRY ENCODING
+-- ============================================================================
+
+
+{-| V1: map encoding using `List.concatMap` (current approach).
+
+Allocates N intermediate 2-element lists, then concatenates them.
+
+-}
+mapIntV1 : List ( Int, Int ) -> BE.Encoder
+mapIntV1 entries =
+    BE.sequence
+        (encodeHeaderLocal 5 (List.length entries)
+            :: List.concatMap
+                (\( k, v ) ->
+                    [ encodeHeaderLocal 0 k
+                    , encodeHeaderLocal 0 v
+                    ]
+                )
+                entries
+        )
+
+
+{-| V2: map encoding using `List.foldr` (no intermediate sublists).
+
+Builds the flat encoder list directly with cons operations.
+
+-}
+mapIntV2 : List ( Int, Int ) -> BE.Encoder
+mapIntV2 entries =
+    BE.sequence
+        (encodeHeaderLocal 5 (List.length entries)
+            :: List.foldr
+                (\( k, v ) acc ->
+                    encodeHeaderLocal 0 k
+                        :: encodeHeaderLocal 0 v
+                        :: acc
+                )
+                []
+                entries
+        )
+
+
+
+-- ============================================================================
+-- OPPORTUNITY #5: FLOAT FAST-REJECT GUARD
+-- ============================================================================
+
+
+{-| V3: float encoding with range guard before float16 round-trip.
+
+If `abs f > 65504`, skip the float16 round-trip check entirely. IEEE 754
+float16 can represent values up to 65504, so larger values can never be
+float16. The `abs` + comparison is a single CPU instruction vs two
+`DataView` allocations + a decode for the round-trip check.
+
+-}
+floatV3 : Float -> CE.Encoder
+floatV3 f =
+    if abs f <= 65504 && float16RoundTrips f then
+        CE.floatWithWidth FW16 f
+
+    else if float32RoundTrips f then
+        CE.floatWithWidth FW32 f
+
+    else
+        CE.floatWithWidth FW64 f
