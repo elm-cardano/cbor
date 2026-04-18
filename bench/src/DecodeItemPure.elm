@@ -1,27 +1,16 @@
 module DecodeItemPure exposing
-    ( CborDecoder
-    , toBD, fromBD
-    , succeed, fail
-    , map, map2, andThen, oneOf, keep, ignore
-    , loop, lazy
-    , int, bigInt, float, bool, null, string, bytes
-    , array, keyValue, field, foldEntries, tag
-    , arrayHeader, mapHeader
-    , RecordBuilder, record, element, optionalElement, buildRecord
-    , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
-    , item
-    , dec_def_array_current, dec_def_array_ip
-    , dec_indef_array_current, dec_indef_array_ip
-    , dec_def_map_current, dec_def_map_ip
+    ( dec_indef_array_current, dec_indef_array_ip
     , dec_indef_map_current, dec_indef_map_ip
-    , dec_indef_cert_current, dec_indef_cert_ip
-    , dec_plutus_indef_5_current, dec_plutus_indef_5_ip
-    , dec_record_10_current, dec_record_10_ip
-    , dec_keyed_10_current, dec_keyed_10_ip
     , dec_indef_fold_current, dec_indef_fold_ip
     , dec_indef_nested_current, dec_indef_nested_ip
+    , dec_indef_cert_current, dec_indef_cert_ip
+    , dec_plutus_indef_5_current, dec_plutus_indef_5_ip
+    , dec_def_array_current, dec_def_array_ip
+    , dec_def_map_current, dec_def_map_ip
+    , dec_record_10_current, dec_record_10_ip
+    , dec_keyed_10_current, dec_keyed_10_ip
     , dec_item_current, dec_item_ip
-    , dec_opt_record_current, dec_opt_record_ip
+    , CborDecoder, KeyedRecordBuilder, RecordBuilder, andThen, array, arrayHeader, bigInt, bool, buildKeyedRecord, buildRecord, bytes, dec_opt_record_current, dec_opt_record_ip, element, fail, field, float, foldEntries, fromBD, ignore, int, item, keep, keyValue, keyedRecord, lazy, loop, map, map2, mapHeader, null, oneOf, optional, optionalElement, record, required, string, succeed, tag, toBD
     )
 
 {-| Item/Pure body decoder: an opaque `CborDecoder` type with two constructors.
@@ -35,10 +24,12 @@ See `report-body-decoders.md` for the full design analysis.
 
 # Benchmarks — indefinite collections (expect ~3x improvement)
 
-    elm-bench -f DecodeItemPure.dec_indef_array_current -f DecodeItemPure.dec_indef_array_ip "()"
-    elm-bench -f DecodeItemPure.dec_indef_map_current -f DecodeItemPure.dec_indef_map_ip "()"
-    elm-bench -f DecodeItemPure.dec_indef_fold_current -f DecodeItemPure.dec_indef_fold_ip "()"
-    elm-bench -f DecodeItemPure.dec_indef_nested_current -f DecodeItemPure.dec_indef_nested_ip "()"
+```sh
+elm-bench -f DecodeItemPure.dec_indef_array_current -f DecodeItemPure.dec_indef_array_ip "()"
+elm-bench -f DecodeItemPure.dec_indef_map_current -f DecodeItemPure.dec_indef_map_ip "()"
+elm-bench -f DecodeItemPure.dec_indef_fold_current -f DecodeItemPure.dec_indef_fold_ip "()"
+elm-bench -f DecodeItemPure.dec_indef_nested_current -f DecodeItemPure.dec_indef_nested_ip "()"
+```
 
 @docs dec_indef_array_current, dec_indef_array_ip
 @docs dec_indef_map_current, dec_indef_map_ip
@@ -48,8 +39,10 @@ See `report-body-decoders.md` for the full design analysis.
 
 # Benchmarks — Cardano patterns with indefinite outer containers
 
-    elm-bench -f DecodeItemPure.dec_indef_cert_current -f DecodeItemPure.dec_indef_cert_ip "()"
-    elm-bench -f DecodeItemPure.dec_plutus_indef_5_current -f DecodeItemPure.dec_plutus_indef_5_ip "()"
+```sh
+elm-bench -f DecodeItemPure.dec_indef_cert_current -f DecodeItemPure.dec_indef_cert_ip "()"
+elm-bench -f DecodeItemPure.dec_plutus_indef_5_current -f DecodeItemPure.dec_plutus_indef_5_ip "()"
+```
 
 @docs dec_indef_cert_current, dec_indef_cert_ip
 @docs dec_plutus_indef_5_current, dec_plutus_indef_5_ip
@@ -57,12 +50,14 @@ See `report-body-decoders.md` for the full design analysis.
 
 # Benchmarks — controls (definite, expect same performance)
 
-    elm-bench -f DecodeItemPure.dec_def_array_current -f DecodeItemPure.dec_def_array_ip "()"
-    elm-bench -f DecodeItemPure.dec_def_map_current -f DecodeItemPure.dec_def_map_ip "()"
-    elm-bench -f DecodeItemPure.dec_record_10_current -f DecodeItemPure.dec_record_10_ip "()"
-    elm-bench -f DecodeItemPure.dec_opt_record_current -f DecodeItemPure.dec_opt_record_ip "()"
-    elm-bench -f DecodeItemPure.dec_keyed_10_current -f DecodeItemPure.dec_keyed_10_ip "()"
-    elm-bench -f DecodeItemPure.dec_item_current -f DecodeItemPure.dec_item_ip "()"
+```sh
+elm-bench -f DecodeItemPure.dec_def_array_current -f DecodeItemPure.dec_def_array_ip "()"
+elm-bench -f DecodeItemPure.dec_def_map_current -f DecodeItemPure.dec_def_map_ip "()"
+elm-bench -f DecodeItemPure.dec_record_10_current -f DecodeItemPure.dec_record_10_ip "()"
+elm-bench -f DecodeItemPure.dec_opt_record_current -f DecodeItemPure.dec_opt_record_ip "()"
+elm-bench -f DecodeItemPure.dec_keyed_10_current -f DecodeItemPure.dec_keyed_10_ip "()"
+elm-bench -f DecodeItemPure.dec_item_current -f DecodeItemPure.dec_item_ip "()"
+```
 
 @docs dec_def_array_current, dec_def_array_ip
 @docs dec_def_map_current, dec_def_map_ip

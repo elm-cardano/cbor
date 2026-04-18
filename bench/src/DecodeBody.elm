@@ -1,14 +1,26 @@
 module DecodeBody exposing
     ( CborDecoder
-    , toBD
-    , map, map2, andThen, oneOf
-    , int, string, bytes, bool, float, null
-    , array, keyValue
-    , tag
+    , andThen
+    , array
+    , bool
+    , bytes
+    , dec_def_array_body
+    , dec_def_array_current
+    , dec_indef_array_body
+    , dec_indef_array_current
+    , dec_indef_map_body
+    , dec_indef_map_current
+    , float
+    , int
     , item
-    , dec_def_array_current, dec_def_array_body
-    , dec_indef_array_current, dec_indef_array_body
-    , dec_indef_map_current, dec_indef_map_body
+    , keyValue
+    , map
+    , map2
+    , null
+    , oneOf
+    , string
+    , tag
+    , toBD
     )
 
 {-| Body decoder prototype: every `CborDecoder` receives its initial byte
@@ -59,9 +71,10 @@ inside the body function.
 
 # Benchmarks
 
-    elm-bench -f DecodeBody.dec_def_array_current -f DecodeBody.dec_def_array_body -f DecodeBody.dec_indef_array_current -f DecodeBody.dec_indef_array_body "()"
-
-    elm-bench -f DecodeBody.dec_indef_map_current -f DecodeBody.dec_indef_map_body "()"
+```sh
+elm-bench -f DecodeBody.dec_def_array_current -f DecodeBody.dec_def_array_body -f DecodeBody.dec_indef_array_current -f DecodeBody.dec_indef_array_body "()"
+elm-bench -f DecodeBody.dec_indef_map_current -f DecodeBody.dec_indef_map_body "()"
+```
 
 -}
 
