@@ -17,11 +17,11 @@ encodeToHex encoder =
     Hex.fromBytes (CE.encode CE.deterministic encoder)
 
 
-{-| Helper: decode from hex using a given decoder.
+{-| Helper: decode from hex using a given CborDecoder.
 -}
-decodeFromHex : BD.Decoder ctx CD.DecodeError a -> String -> Result (BD.Error ctx CD.DecodeError) a
+decodeFromHex : CD.CborDecoder ctx a -> String -> Result (BD.Error ctx CD.DecodeError) a
 decodeFromHex decoder hex =
-    BD.decode decoder (Hex.toBytesUnchecked hex)
+    CD.decode decoder (Hex.toBytesUnchecked hex)
 
 
 {-| Helper: encode with indefinite-length strategy and return hex string.
@@ -658,32 +658,32 @@ roundTripTests =
         , test "bool true" <|
             \_ ->
                 CE.encode CE.deterministic (CE.bool True)
-                    |> BD.decode CD.bool
+                    |> CD.decode CD.bool
                     |> Expect.equal (Ok True)
         , test "bool false" <|
             \_ ->
                 CE.encode CE.deterministic (CE.bool False)
-                    |> BD.decode CD.bool
+                    |> CD.decode CD.bool
                     |> Expect.equal (Ok False)
         , test "string round-trip" <|
             \_ ->
                 CE.encode CE.deterministic (CE.string "hello")
-                    |> BD.decode CD.string
+                    |> CD.decode CD.string
                     |> Expect.equal (Ok "hello")
         , test "string with unicode" <|
             \_ ->
                 CE.encode CE.deterministic (CE.string "日本語")
-                    |> BD.decode CD.string
+                    |> CD.decode CD.string
                     |> Expect.equal (Ok "日本語")
         , test "empty array" <|
             \_ ->
                 CE.encode CE.deterministic (CE.array [])
-                    |> BD.decode (CD.array CD.int)
+                    |> CD.decode (CD.array CD.int)
                     |> Expect.equal (Ok [])
         , test "array of ints" <|
             \_ ->
                 CE.encode CE.deterministic (CE.list CE.int [ 1, 2, 3, 4, 5 ])
-                    |> BD.decode (CD.array CD.int)
+                    |> CD.decode (CD.array CD.int)
                     |> Expect.equal (Ok [ 1, 2, 3, 4, 5 ])
         , test "map of int->string" <|
             \_ ->
@@ -693,23 +693,23 @@ roundTripTests =
                         , ( CE.int 2, CE.string "two" )
                         ]
                     )
-                    |> BD.decode (CD.keyValue CD.int CD.string)
+                    |> CD.decode (CD.keyValue CD.int CD.string)
                     |> Expect.equal (Ok [ ( 1, "one" ), ( 2, "two" ) ])
         , test "null round-trip" <|
             \_ ->
                 CE.encode CE.deterministic CE.null
-                    |> BD.decode (CD.null ())
+                    |> CD.decode (CD.null ())
                     |> Expect.equal (Ok ())
         , test "Infinity round-trip" <|
             \_ ->
                 CE.encode CE.deterministic (CE.float (1 / 0))
-                    |> BD.decode CD.float
+                    |> CD.decode CD.float
                     |> Result.map isInfinite
                     |> Expect.equal (Ok True)
         , test "NaN round-trip" <|
             \_ ->
                 CE.encode CE.deterministic (CE.float (0 / 0))
-                    |> BD.decode CD.float
+                    |> CD.decode CD.float
                     |> Result.map isNaN
                     |> Expect.equal (Ok True)
         ]
@@ -718,7 +718,7 @@ roundTripTests =
 roundTripInt : Int -> Expect.Expectation
 roundTripInt n =
     CE.encode CE.deterministic (CE.int n)
-        |> BD.decode CD.int
+        |> CD.decode CD.int
         |> Expect.equal (Ok n)
 
 
@@ -750,14 +750,14 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.5, CE.float 2.5 ])
 
-                    decoder : BD.Decoder () CD.DecodeError Point
+                    decoder : CD.CborDecoder () Point
                     decoder =
                         CD.record Point
                             |> CD.element CD.float
                             |> CD.element CD.float
                             |> CD.buildRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { x = 1.5, y = 2.5 })
         , test "optional element present" <|
             \_ ->
@@ -767,7 +767,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0, CE.float 2.0, CE.float 3.0 ])
 
-                    decoder : BD.Decoder () CD.DecodeError Point3D
+                    decoder : CD.CborDecoder () Point3D
                     decoder =
                         CD.record Point3D
                             |> CD.element CD.float
@@ -775,7 +775,7 @@ recordBuilderTests =
                             |> CD.optionalElement CD.float 0.0
                             |> CD.buildRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { x = 1.0, y = 2.0, z = 3.0 })
         , test "optional element absent" <|
             \_ ->
@@ -785,7 +785,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0, CE.float 2.0 ])
 
-                    decoder : BD.Decoder () CD.DecodeError Point3D
+                    decoder : CD.CborDecoder () Point3D
                     decoder =
                         CD.record Point3D
                             |> CD.element CD.float
@@ -793,7 +793,7 @@ recordBuilderTests =
                             |> CD.optionalElement CD.float 0.0
                             |> CD.buildRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { x = 1.0, y = 2.0, z = 0.0 })
         , test "extra array elements skipped" <|
             \_ ->
@@ -803,14 +803,14 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0, CE.float 2.0, CE.float 3.0, CE.float 4.0 ])
 
-                    decoder : BD.Decoder () CD.DecodeError Point
+                    decoder : CD.CborDecoder () Point
                     decoder =
                         CD.record Point
                             |> CD.element CD.float
                             |> CD.element CD.float
                             |> CD.buildRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { x = 1.0, y = 2.0 })
         , test "too few elements fails" <|
             \_ ->
@@ -820,14 +820,14 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.float 1.0 ])
 
-                    decoder : BD.Decoder () CD.DecodeError Point
+                    decoder : CD.CborDecoder () Point
                     decoder =
                         CD.record Point
                             |> CD.element CD.float
                             |> CD.element CD.float
                             |> CD.buildRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Result.toMaybe
                     |> Expect.equal Nothing
         , test "multiple optionals all absent" <|
@@ -838,7 +838,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.string "localhost", CE.int 8080 ])
 
-                    decoder : BD.Decoder () CD.DecodeError Config
+                    decoder : CD.CborDecoder () Config
                     decoder =
                         CD.record Config
                             |> CD.element CD.string
@@ -847,7 +847,7 @@ recordBuilderTests =
                             |> CD.optionalElement CD.bool False
                             |> CD.buildRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { host = "localhost", port_ = 8080, debug = False, verbose = False })
         , test "multiple optionals one present" <|
             \_ ->
@@ -857,7 +857,7 @@ recordBuilderTests =
                         CE.encode CE.deterministic
                             (CE.array [ CE.string "localhost", CE.int 8080, CE.bool True ])
 
-                    decoder : BD.Decoder () CD.DecodeError Config
+                    decoder : CD.CborDecoder () Config
                     decoder =
                         CD.record Config
                             |> CD.element CD.string
@@ -866,7 +866,7 @@ recordBuilderTests =
                             |> CD.optionalElement CD.bool False
                             |> CD.buildRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { host = "localhost", port_ = 8080, debug = True, verbose = False })
         ]
 
@@ -906,14 +906,14 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () CD.DecodeError Person
+                    decoder : CD.CborDecoder () Person
                     decoder =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Alice", age = 30 })
         , test "optional field present" <|
             \_ ->
@@ -928,7 +928,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () CD.DecodeError PersonOptional
+                    decoder : CD.CborDecoder () PersonOptional
                     decoder =
                         CD.keyedRecord CD.int PersonOptional
                             |> CD.required 0 CD.string
@@ -936,7 +936,7 @@ keyedRecordBuilderTests =
                             |> CD.optional 2 CD.string ""
                             |> CD.buildKeyedRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Bob", age = 25, email = "bob@example.com" })
         , test "optional field absent" <|
             \_ ->
@@ -950,7 +950,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () CD.DecodeError PersonOptional
+                    decoder : CD.CborDecoder () PersonOptional
                     decoder =
                         CD.keyedRecord CD.int PersonOptional
                             |> CD.required 0 CD.string
@@ -958,7 +958,7 @@ keyedRecordBuilderTests =
                             |> CD.optional 2 CD.string ""
                             |> CD.buildKeyedRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Charlie", age = 35, email = "" })
         , test "stashed key scenario" <|
             \_ ->
@@ -973,7 +973,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () CD.DecodeError PersonFull
+                    decoder : CD.CborDecoder () PersonFull
                     decoder =
                         CD.keyedRecord CD.int PersonFull
                             |> CD.required 0 CD.string
@@ -982,7 +982,7 @@ keyedRecordBuilderTests =
                             |> CD.required 3 CD.bool
                             |> CD.buildKeyedRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Alice", age = 30, email = "", active = True })
         , test "multiple consecutive absent optionals" <|
             \_ ->
@@ -996,7 +996,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () CD.DecodeError DetailedPerson
+                    decoder : CD.CborDecoder () DetailedPerson
                     decoder =
                         CD.keyedRecord CD.int DetailedPerson
                             |> CD.required 0 CD.string
@@ -1005,7 +1005,7 @@ keyedRecordBuilderTests =
                             |> CD.optional 3 CD.string ""
                             |> CD.buildKeyedRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Alice", age = 30, email = "", phone = "" })
         , test "extra trailing entries skipped" <|
             \_ ->
@@ -1020,14 +1020,14 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () CD.DecodeError Person
+                    decoder : CD.CborDecoder () Person
                     decoder =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Alice", age = 30 })
         , test "required key mismatch fails" <|
             \_ ->
@@ -1041,14 +1041,14 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () CD.DecodeError Person
+                    decoder : CD.CborDecoder () Person
                     decoder =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Result.toMaybe
                     |> Expect.equal Nothing
         , test "optional as last step with unmatched key fails" <|
@@ -1064,7 +1064,7 @@ keyedRecordBuilderTests =
                                 ]
                             )
 
-                    decoder : BD.Decoder () CD.DecodeError PersonOptional
+                    decoder : CD.CborDecoder () PersonOptional
                     decoder =
                         CD.keyedRecord CD.int PersonOptional
                             |> CD.required 0 CD.string
@@ -1072,7 +1072,7 @@ keyedRecordBuilderTests =
                             |> CD.optional 2 CD.string ""
                             |> CD.buildKeyedRecord
                 in
-                BD.decode decoder encoded
+                CD.decode decoder encoded
                     |> Result.toMaybe
                     |> Expect.equal Nothing
         ]
@@ -1583,14 +1583,14 @@ foldEntriesTests =
                 let
                     handler : Int -> Int -> BD.Decoder () CD.DecodeError Int
                     handler _ acc =
-                        CD.int |> BD.map (\v -> acc + v)
+                        CD.toBD CD.int |> BD.map (\v -> acc + v)
                 in
                 decodeFromHex (CD.foldEntries CD.int handler 0) "a201020304"
                     |> Expect.equal (Ok 6)
         , test "empty map" <|
             \_ ->
                 decodeFromHex
-                    (CD.foldEntries CD.int (\_ acc -> CD.int |> BD.map (\v -> acc + v)) 0)
+                    (CD.foldEntries CD.int (\_ acc -> CD.toBD CD.int |> BD.map (\v -> acc + v)) 0)
                     "a0"
                     |> Expect.equal (Ok 0)
         , test "indefinite map" <|
@@ -1598,7 +1598,7 @@ foldEntriesTests =
                 let
                     handler : Int -> Int -> BD.Decoder () CD.DecodeError Int
                     handler _ acc =
-                        CD.int |> BD.map (\v -> acc + v)
+                        CD.toBD CD.int |> BD.map (\v -> acc + v)
                 in
                 decodeFromHex (CD.foldEntries CD.int handler 0) "bf01020304ff"
                     |> Expect.equal (Ok 6)
@@ -1619,15 +1619,15 @@ foldEntriesTests =
                     handler key acc =
                         case key of
                             0 ->
-                                CD.string |> BD.map (\name -> { acc | name = name })
+                                CD.toBD CD.string |> BD.map (\name -> { acc | name = name })
 
                             1 ->
-                                CD.int |> BD.map (\age -> { acc | age = age })
+                                CD.toBD CD.int |> BD.map (\age -> { acc | age = age })
 
                             _ ->
-                                CD.item |> BD.map (\_ -> acc)
+                                CD.toBD CD.item |> BD.map (\_ -> acc)
                 in
-                BD.decode (CD.foldEntries CD.int handler { name = "", age = 0 }) encoded
+                CD.decode (CD.foldEntries CD.int handler { name = "", age = 0 }) encoded
                     |> Expect.equal (Ok { name = "Alice", age = 30 })
         ]
 

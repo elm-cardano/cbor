@@ -245,7 +245,7 @@ listItemEncoder100 =
 
 itemFromBytes : Bytes -> CborItem
 itemFromBytes bs =
-    BD.decode CD.item bs
+    BD.decode (CD.toBD CD.item) bs
         |> Result.withDefault CborNull
 
 
@@ -388,32 +388,38 @@ type PlutusNested
 
 decodePlutusFlat : BD.Decoder ctx CD.DecodeError PlutusFlat
 decodePlutusFlat =
-    BD.oneOf
-        [ CD.tag (Unknown 121) (CD.array CD.int) |> BD.map PFConstr
-        , CD.keyValue CD.int CD.int |> BD.map (\_ -> PFMap)
-        , CD.array CD.int |> BD.map (\_ -> PFArray)
-        , CD.int |> BD.map PFInt
-        , CD.bytes |> BD.map PFBytes
-        ]
+    CD.toBD
+        (CD.oneOf
+            [ CD.tag (Unknown 121) (CD.array CD.int) |> CD.map PFConstr
+            , CD.keyValue CD.int CD.int |> CD.map (\_ -> PFMap)
+            , CD.array CD.int |> CD.map (\_ -> PFArray)
+            , CD.int |> CD.map PFInt
+            , CD.bytes |> CD.map PFBytes
+            ]
+        )
 
 
 {-| Recursive decoder for nested plutus\_data-like structures.
-Self-references deferred via `BD.andThen (\() -> ...)` to avoid
-Elm's eager-evaluation cycle.
+Self-references deferred via `CD.lazy` to avoid Elm's eager-evaluation cycle.
 -}
 decodePlutusNested : BD.Decoder ctx CD.DecodeError PlutusNested
 decodePlutusNested =
+    CD.toBD decodePlutusNestedCbor
+
+
+decodePlutusNestedCbor : CD.CborDecoder ctx PlutusNested
+decodePlutusNestedCbor =
     let
-        lazy : BD.Decoder ctx CD.DecodeError PlutusNested
-        lazy =
-            BD.andThen (\() -> decodePlutusNested) (BD.succeed ())
+        self : CD.CborDecoder ctx PlutusNested
+        self =
+            CD.lazy (\() -> decodePlutusNestedCbor)
     in
-    BD.oneOf
-        [ CD.tag (Unknown 121) (CD.array lazy) |> BD.map PNConstr
-        , CD.keyValue lazy lazy |> BD.map PNMap
-        , CD.array lazy |> BD.map PNArray
-        , CD.int |> BD.map PNInt
-        , CD.bytes |> BD.map PNBytes
+    CD.oneOf
+        [ CD.tag (Unknown 121) (CD.array self) |> CD.map PNConstr
+        , CD.keyValue self self |> CD.map PNMap
+        , CD.array self |> CD.map PNArray
+        , CD.int |> CD.map PNInt
+        , CD.bytes |> CD.map PNBytes
         ]
 
 
@@ -423,58 +429,66 @@ decodePlutusNested =
 
 decR3Builder : BD.Decoder ctx CD.DecodeError R3
 decR3Builder =
-    CD.record R3
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.buildRecord
+    CD.toBD
+        (CD.record R3
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.buildRecord
+        )
 
 
 decR3Manual : BD.Decoder ctx CD.DecodeError R3
 decR3Manual =
-    CD.arrayHeader
-        |> BD.andThen
-            (\_ ->
-                BD.succeed R3
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-            )
+    CD.toBD
+        (CD.arrayHeader
+            |> CD.andThen
+                (\_ ->
+                    CD.succeed R3
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                )
+        )
 
 
 decR10Builder : BD.Decoder ctx CD.DecodeError R10
 decR10Builder =
-    CD.record R10
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.buildRecord
+    CD.toBD
+        (CD.record R10
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.buildRecord
+        )
 
 
 decR10Manual : BD.Decoder ctx CD.DecodeError R10
 decR10Manual =
-    CD.arrayHeader
-        |> BD.andThen
-            (\_ ->
-                BD.succeed R10
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-                    |> BD.keep CD.int
-            )
+    CD.toBD
+        (CD.arrayHeader
+            |> CD.andThen
+                (\_ ->
+                    CD.succeed R10
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                        |> CD.keep CD.int
+                )
+        )
 
 
 
@@ -483,35 +497,45 @@ decR10Manual =
 
 decKR3Builder : BD.Decoder ctx CD.DecodeError R3
 decKR3Builder =
-    CD.keyedRecord CD.int R3
-        |> CD.required 0 CD.int
-        |> CD.required 1 CD.int
-        |> CD.required 2 CD.int
-        |> CD.buildKeyedRecord
+    CD.toBD
+        (CD.keyedRecord CD.int R3
+            |> CD.required 0 CD.int
+            |> CD.required 1 CD.int
+            |> CD.required 2 CD.int
+            |> CD.buildKeyedRecord
+        )
 
 
 decKR10Builder : BD.Decoder ctx CD.DecodeError R10
 decKR10Builder =
-    CD.keyedRecord CD.int R10
-        |> CD.required 0 CD.int
-        |> CD.required 1 CD.int
-        |> CD.required 2 CD.int
-        |> CD.required 3 CD.int
-        |> CD.required 4 CD.int
-        |> CD.required 5 CD.int
-        |> CD.required 6 CD.int
-        |> CD.required 7 CD.int
-        |> CD.required 8 CD.int
-        |> CD.required 9 CD.int
-        |> CD.buildKeyedRecord
+    CD.toBD
+        (CD.keyedRecord CD.int R10
+            |> CD.required 0 CD.int
+            |> CD.required 1 CD.int
+            |> CD.required 2 CD.int
+            |> CD.required 3 CD.int
+            |> CD.required 4 CD.int
+            |> CD.required 5 CD.int
+            |> CD.required 6 CD.int
+            |> CD.required 7 CD.int
+            |> CD.required 8 CD.int
+            |> CD.required 9 CD.int
+            |> CD.buildKeyedRecord
+        )
 
 
 decFold : BD.Decoder ctx CD.DecodeError (List ( Int, Int ))
 decFold =
-    CD.foldEntries CD.int
-        (\key acc -> CD.int |> BD.map (\v -> ( key, v ) :: acc))
-        []
-        |> BD.map List.reverse
+    let
+        intBD =
+            CD.toBD CD.int
+    in
+    CD.toBD
+        (CD.foldEntries CD.int
+            (\key acc -> intBD |> BD.map (\v -> ( key, v ) :: acc))
+            []
+            |> CD.map List.reverse
+        )
 
 
 
@@ -595,12 +619,12 @@ enc_map_canonical_str100 () =
 
 dec_direct_array100 : () -> Maybe (List Int)
 dec_direct_array100 () =
-    BD.decode (CD.array CD.int) array100Data |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array CD.int)) array100Data |> Result.toMaybe
 
 
 dec_item_array100 : () -> Maybe (List Int)
 dec_item_array100 () =
-    BD.decode CD.item array100Data
+    BD.decode (CD.toBD CD.item) array100Data
         |> Result.toMaybe
         |> Maybe.andThen itemToListInt
 
@@ -720,7 +744,7 @@ dec_record_10_manual () =
 
 dec_record_30_array : () -> Maybe (List Int)
 dec_record_30_array () =
-    BD.decode (CD.array CD.int) record30Data |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array CD.int)) record30Data |> Result.toMaybe
 
 
 dec_keyed_3_builder : () -> Maybe (List ( Int, Int ))
@@ -749,7 +773,7 @@ dec_keyed_10_fold () =
 
 dec_keyed_30_keyValue : () -> Maybe (List ( Int, Int ))
 dec_keyed_30_keyValue () =
-    BD.decode (CD.keyValue CD.int CD.int) keyedRecord30Data |> Result.toMaybe
+    BD.decode (CD.toBD (CD.keyValue CD.int CD.int)) keyedRecord30Data |> Result.toMaybe
 
 
 dec_keyed_30_fold : () -> Maybe (List ( Int, Int ))

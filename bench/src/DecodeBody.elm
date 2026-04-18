@@ -962,7 +962,7 @@ Uses `BD.repeat` — already fast path. Control benchmark.
 -}
 dec_def_array_current : () -> Maybe (List Int)
 dec_def_array_current () =
-    BD.decode (CD.array CD.int) defIntArray100 |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array CD.int)) defIntArray100 |> Result.toMaybe
 
 
 {-| Body decoder: definite-length array of 100 ints.
@@ -978,7 +978,7 @@ Uses `BD.oneOf` — **no fast path**, entire loop on slow path.
 -}
 dec_indef_array_current : () -> Maybe (List Int)
 dec_indef_array_current () =
-    BD.decode (CD.array CD.int) indefIntArray100 |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array CD.int)) indefIntArray100 |> Result.toMaybe
 
 
 {-| Body decoder: indefinite-length array of 100 ints.
@@ -994,7 +994,7 @@ Uses `BD.oneOf` — no fast path.
 -}
 dec_indef_map_current : () -> Maybe (List ( Int, Int ))
 dec_indef_map_current () =
-    BD.decode (CD.keyValue CD.int CD.int) indefIntMap100 |> Result.toMaybe
+    BD.decode (CD.toBD (CD.keyValue CD.int CD.int)) indefIntMap100 |> Result.toMaybe
 
 
 {-| Body decoder: indefinite-length map of 100 int→int entries.

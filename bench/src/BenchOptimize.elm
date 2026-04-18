@@ -395,14 +395,14 @@ itemMap100Data =
 -}
 dec_int_v1 : () -> Maybe (List Int)
 dec_int_v1 () =
-    BD.decode (CD.array CD.int) int1000Data |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array CD.int)) int1000Data |> Result.toMaybe
 
 
 {-| V2: int decoder with safeArgument (merged overflow check).
 -}
 dec_int_v2 : () -> Maybe (List Int)
 dec_int_v2 () =
-    BD.decode (CD.array V2Decode.intV2) int1000Data |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array (CD.fromBD V2Decode.intV2))) int1000Data |> Result.toMaybe
 
 
 
@@ -415,14 +415,14 @@ dec_int_v2 () =
 -}
 dec_string_v1 : () -> Maybe (List String)
 dec_string_v1 () =
-    BD.decode (CD.array CD.string) string100Data |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array CD.string)) string100Data |> Result.toMaybe
 
 
 {-| V2: string decoder with withArgument (fused continuation).
 -}
 dec_string_v2 : () -> Maybe (List String)
 dec_string_v2 () =
-    BD.decode (CD.array V2Decode.stringV2) string100Data |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array (CD.fromBD V2Decode.stringV2))) string100Data |> Result.toMaybe
 
 
 
@@ -435,7 +435,7 @@ dec_string_v2 () =
 -}
 dec_item_array_v1 : () -> Maybe CborItem
 dec_item_array_v1 () =
-    BD.decode CD.item itemArray100Data |> Result.toMaybe
+    BD.decode (CD.toBD CD.item) itemArray100Data |> Result.toMaybe
 
 
 {-| V2: item decoder with withArgument + BD.repeat on 100-element int array.
@@ -449,7 +449,7 @@ dec_item_array_v2 () =
 -}
 dec_item_map_v1 : () -> Maybe CborItem
 dec_item_map_v1 () =
-    BD.decode CD.item itemMap100Data |> Result.toMaybe
+    BD.decode (CD.toBD CD.item) itemMap100Data |> Result.toMaybe
 
 
 {-| V2: item decoder with withArgument + BD.repeat on 100-entry int map.

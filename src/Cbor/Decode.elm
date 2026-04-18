@@ -1,5 +1,8 @@
 module Cbor.Decode exposing
-    ( DecodeError(..), errorToString
+    ( CborDecoder, decode, toBD, fromBD
+    , DecodeError(..), errorToString
+    , succeed, fail
+    , map, map2, andThen, oneOf, keep, ignore, loop, lazy
     , int, bigInt, float, bool, null, string, bytes
     , array, keyValue, field, foldEntries, tag
     , RecordBuilder, record, element, optionalElement, buildRecord
@@ -10,27 +13,42 @@ module Cbor.Decode exposing
 
 {-| CBOR decoding combinators.
 
-Build decoders for your domain types. These produce `Bytes.Decoder.Decoder`
-values — use `Bytes.Decoder.decode` to run them.
+Build decoders for your domain types. These produce `CborDecoder` values.
+Run them with `decode`, or convert to a `Bytes.Decoder.Decoder` with `toBD`.
 
-    import Bytes.Decoder as BD
     import Cbor.Decode as CD
 
     type alias Person =
         { name : String, age : Int }
 
-    decodePerson : BD.Decoder ctx CD.DecodeError Person
+    decodePerson : CD.CborDecoder ctx Person
     decodePerson =
         CD.keyedRecord CD.int Person
             |> CD.required 0 CD.string
             |> CD.required 1 CD.int
             |> CD.buildKeyedRecord
 
-Composition combinators (`succeed`, `fail`, `andThen`, `oneOf`, `map`,
-`map2`–`map5`, `keep`, `ignore`, `loop`, `repeat`, `inContext`) come from
-`Bytes.Decoder` directly.
+    -- To run: CD.decode decodePerson someBytes
+
+
+## Type
+
+@docs CborDecoder, decode, toBD, fromBD
+
+
+## Errors
 
 @docs DecodeError, errorToString
+
+
+## Combinators
+
+@docs succeed, fail
+@docs map, map2, andThen, oneOf, keep, ignore, loop, lazy
+
+
+## Primitives
+
 @docs int, bigInt, float, bool, null, string, bytes
 
 
@@ -65,6 +83,61 @@ import Bytes
 import Bytes.Decoder as BD
 import Bytes.Encode
 import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), tagToInt)
+
+
+
+-- TYPE
+
+
+{-| Opaque CBOR decoder.
+
+Internally uses two variants: `Item` receives a pre-read initial byte
+(the CBOR byte encoding major type + additional info), and `Pure` consumes
+no bytes (used by `succeed`, `fail`). This split enables fast-path decoding
+for indefinite-length collections without `BD.oneOf`.
+
+-}
+type CborDecoder ctx a
+    = Item (Int -> BD.Decoder ctx DecodeError a)
+    | Pure (BD.Decoder ctx DecodeError a)
+
+
+{-| Convert a `CborDecoder` to a `Bytes.Decoder.Decoder`.
+
+`Item` decoders read one byte first; `Pure` decoders pass through.
+Use this at the boundary when you need to run a decoder with `BD.decode`.
+
+-}
+toBD : CborDecoder ctx a -> BD.Decoder ctx DecodeError a
+toBD decoder =
+    case decoder of
+        Item body ->
+            u8 |> BD.andThen body
+
+        Pure bd ->
+            bd
+
+
+{-| Run a `CborDecoder` on some `Bytes`.
+
+Convenience for `Bytes.Decoder.decode (toBD decoder) bytes`.
+
+-}
+decode : CborDecoder ctx a -> Bytes.Bytes -> Result (BD.Error ctx DecodeError) a
+decode decoder input =
+    BD.decode (toBD decoder) input
+
+
+{-| Wrap a raw `Bytes.Decoder.Decoder` as a `CborDecoder` that consumes
+no initial byte.
+-}
+fromBD : BD.Decoder ctx DecodeError a -> CborDecoder ctx a
+fromBD bd =
+    Pure bd
+
+
+
+-- ERRORS
 
 
 {-| Structured error type for CBOR decoding failures.
@@ -119,11 +192,162 @@ errorToString err =
 
 
 
+-- COMBINATORS
+
+
+{-| A decoder that always succeeds with the given value, consuming no bytes.
+-}
+succeed : a -> CborDecoder ctx a
+succeed a =
+    Pure (BD.succeed a)
+
+
+{-| A decoder that always fails with the given error.
+-}
+fail : DecodeError -> CborDecoder ctx a
+fail err =
+    Pure (BD.fail err)
+
+
+{-| Transform the result of a decoder.
+-}
+map : (a -> b) -> CborDecoder ctx a -> CborDecoder ctx b
+map f decoder =
+    case decoder of
+        Item body ->
+            Item (\ib -> body ib |> BD.map f)
+
+        Pure bd ->
+            Pure (bd |> BD.map f)
+
+
+{-| Combine two decoders sequentially.
+-}
+map2 : (a -> b -> c) -> CborDecoder ctx a -> CborDecoder ctx b -> CborDecoder ctx c
+map2 f decoderA decoderB =
+    case decoderA of
+        Item bodyA ->
+            let
+                bdB =
+                    toBD decoderB
+            in
+            Item (\ib -> BD.map2 f (bodyA ib) bdB)
+
+        Pure bdA ->
+            case decoderB of
+                Item bodyB ->
+                    Item (\ib -> BD.map2 f bdA (bodyB ib))
+
+                Pure bdB ->
+                    Pure (BD.map2 f bdA bdB)
+
+
+{-| Chain decoders. The continuation is chosen based on the first result.
+-}
+andThen : (a -> CborDecoder ctx b) -> CborDecoder ctx a -> CborDecoder ctx b
+andThen f decoder =
+    case decoder of
+        Item body ->
+            Item (\ib -> body ib |> BD.andThen (\a -> toBD (f a)))
+
+        Pure bd ->
+            Pure (bd |> BD.andThen (\a -> toBD (f a)))
+
+
+{-| Try multiple decoders in order. Each decoder sees the same initial byte.
+-}
+oneOf : List (CborDecoder ctx a) -> CborDecoder ctx a
+oneOf decoders =
+    Item
+        (\initialByte ->
+            BD.oneOf
+                (List.map
+                    (\d ->
+                        case d of
+                            Item body ->
+                                body initialByte
+
+                            Pure bd ->
+                                bd
+                    )
+                    decoders
+                )
+        )
+
+
+{-| Apply a decoder producing a function to a decoder producing an argument.
+
+    succeed Point
+        |> keep float
+        |> keep float
+
+-}
+keep : CborDecoder ctx a -> CborDecoder ctx (a -> b) -> CborDecoder ctx b
+keep valueDecoder funcDecoder =
+    case funcDecoder of
+        Pure funcBd ->
+            case valueDecoder of
+                Item valueBody ->
+                    Item (\ib -> BD.map2 (\f v -> f v) funcBd (valueBody ib))
+
+                Pure valueBd ->
+                    Pure (BD.map2 (\f v -> f v) funcBd valueBd)
+
+        Item funcBody ->
+            let
+                valueBD =
+                    toBD valueDecoder
+            in
+            Item (\ib -> BD.map2 (\f v -> f v) (funcBody ib) valueBD)
+
+
+{-| Decode and discard a value, keeping the previous result.
+-}
+ignore : CborDecoder ctx ignored -> CborDecoder ctx keep -> CborDecoder ctx keep
+ignore ignoredDecoder keepDecoder =
+    case keepDecoder of
+        Item keepBody ->
+            let
+                ignoredBD =
+                    toBD ignoredDecoder
+            in
+            Item (\ib -> BD.map2 (\k _ -> k) (keepBody ib) ignoredBD)
+
+        Pure keepBd ->
+            case ignoredDecoder of
+                Item ignoredBody ->
+                    Item (\ib -> BD.map2 (\k _ -> k) keepBd (ignoredBody ib))
+
+                Pure ignoredBd ->
+                    Pure (BD.map2 (\k _ -> k) keepBd ignoredBd)
+
+
+{-| Loop with state, decoding until `Done`.
+-}
+loop : (state -> CborDecoder ctx (BD.Step state a)) -> state -> CborDecoder ctx a
+loop f initialState =
+    Pure (BD.loop (\s -> toBD (f s)) initialState)
+
+
+{-| Deferred construction for recursive decoders.
+-}
+lazy : (() -> CborDecoder ctx a) -> CborDecoder ctx a
+lazy thunk =
+    Item
+        (\ib ->
+            case thunk () of
+                Item body ->
+                    body ib
+
+                Pure bd ->
+                    bd
+        )
+
+
+
 -- INTERNAL HELPERS
 
 
-{-| Read a single unsigned byte.
--}
 u8 : BD.Decoder ctx err Int
 u8 =
     BD.unsignedInt8
@@ -141,6 +365,13 @@ u16 =
 u32 : BD.Decoder ctx err Int
 u32 =
     BD.unsignedInt32 Bytes.BE
+
+
+{-| Maximum safe integer value for Elm (2^52).
+-}
+maxSafeInt : Int
+maxSafeInt =
+    4503599627370496
 
 
 {-| Fused `decodeArgument` + overflow check.
@@ -267,254 +498,10 @@ intPairToBytes hi lo =
         )
 
 
-{-| Maximum safe integer value for Elm (2^52).
--}
-maxSafeInt : Int
-maxSafeInt =
-    4503599627370496
-
-
-
--- PRIMITIVES
-
-
-{-| Decode a CBOR integer (major types 0 and 1).
-
-Fails if the absolute value exceeds 2^52. For larger values, use `bigInt`.
-
--}
-int : BD.Decoder ctx DecodeError Int
-int =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo : Int
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
-                in
-                if majorType == 0 then
-                    safeArgument additionalInfo
-
-                else if majorType == 1 then
-                    safeArgument additionalInfo
-                        |> BD.map (\n -> -1 - n)
-
-                else
-                    BD.fail (WrongMajorType { expected = 0, got = majorType })
-            )
-
-
-{-| Decode any CBOR integer, including bignums (tags 2 and 3).
-
-Returns `( Sign, Bytes )` where `Bytes` is the minimal big-endian
-representation of the unsigned argument.
-
--}
-bigInt : BD.Decoder ctx DecodeError ( Sign, Bytes.Bytes )
-bigInt =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-
-                    additionalInfo : Int
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
-                in
-                if majorType == 0 then
-                    decodeArgumentBytes additionalInfo
-                        |> BD.map (\bs -> ( Positive, bs ))
-
-                else if majorType == 1 then
-                    decodeArgumentBytes additionalInfo
-                        |> BD.map (\bs -> ( Negative, bs ))
-
-                else if majorType == 6 then
-                    withArgument additionalInfo
-                        (\tagNum ->
-                            if tagNum == 2 then
-                                decodeBytesRaw
-                                    |> BD.map (\bs -> ( Positive, bs ))
-
-                            else if tagNum == 3 then
-                                decodeBytesRaw
-                                    |> BD.map (\bs -> ( Negative, bs ))
-
-                            else
-                                BD.fail (WrongTag { expected = 2, got = tagNum })
-                        )
-
-                else
-                    BD.fail (WrongMajorType { expected = 0, got = majorType })
-            )
-
-
-{-| Decode a CBOR float (major type 7, additional info 25/26/27).
--}
-float : BD.Decoder ctx DecodeError Float
-float =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-                in
-                if majorType /= 7 then
-                    BD.fail (WrongMajorType { expected = 7, got = majorType })
-
-                else
-                    let
-                        additionalInfo : Int
-                        additionalInfo =
-                            Bitwise.and 0x1F initialByte
-                    in
-                    if additionalInfo == 25 then
-                        BD.float16 Bytes.BE
-
-                    else if additionalInfo == 26 then
-                        BD.float32 Bytes.BE
-
-                    else if additionalInfo == 27 then
-                        BD.float64 Bytes.BE
-
-                    else
-                        BD.fail (WrongInitialByte { got = initialByte })
-            )
-
-
-{-| Decode a CBOR boolean (0xF4 for false, 0xF5 for true).
--}
-bool : BD.Decoder ctx DecodeError Bool
-bool =
-    u8
-        |> BD.andThen
-            (\byte ->
-                if byte == 0xF4 then
-                    BD.succeed False
-
-                else if byte == 0xF5 then
-                    BD.succeed True
-
-                else
-                    BD.fail (WrongInitialByte { got = byte })
-            )
-
-
-{-| Decode a CBOR null (0xF6), returning the provided default value.
--}
-null : a -> BD.Decoder ctx DecodeError a
-null default =
-    u8
-        |> BD.andThen
-            (\byte ->
-                if byte == 0xF6 then
-                    BD.succeed default
-
-                else
-                    BD.fail (WrongInitialByte { got = byte })
-            )
-
-
-{-| Decode a CBOR text string (major type 3).
-
-Concatenates indefinite-length chunks transparently.
-
--}
-string : BD.Decoder ctx DecodeError String
-string =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-                in
-                if majorType /= 3 then
-                    BD.fail (WrongMajorType { expected = 3, got = majorType })
-
-                else
-                    let
-                        additionalInfo : Int
-                        additionalInfo =
-                            Bitwise.and 0x1F initialByte
-                    in
-                    if additionalInfo == 31 then
-                        BD.loop
-                            (\chunks ->
-                                u8
-                                    |> BD.andThen
-                                        (\byte ->
-                                            if byte == 0xFF then
-                                                BD.succeed (BD.Done (String.concat (List.reverse chunks)))
-
-                                            else
-                                                withArgument (Bitwise.and 0x1F byte)
-                                                    (\len -> BD.string len)
-                                                    |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
-                                        )
-                            )
-                            []
-
-                    else
-                        withArgument additionalInfo (\len -> BD.string len)
-            )
-
-
-{-| Decode a CBOR byte string (major type 2).
-
-Concatenates indefinite-length chunks transparently.
-
--}
-bytes : BD.Decoder ctx DecodeError Bytes.Bytes
-bytes =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-                in
-                if majorType /= 2 then
-                    BD.fail (WrongMajorType { expected = 2, got = majorType })
-
-                else
-                    let
-                        additionalInfo : Int
-                        additionalInfo =
-                            Bitwise.and 0x1F initialByte
-                    in
-                    if additionalInfo == 31 then
-                        BD.loop
-                            (\chunks ->
-                                u8
-                                    |> BD.andThen
-                                        (\byte ->
-                                            if byte == 0xFF then
-                                                BD.succeed (BD.Done (concatBytes (List.reverse chunks)))
-
-                                            else
-                                                withArgument (Bitwise.and 0x1F byte)
-                                                    (\len -> BD.bytes len)
-                                                    |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
-                                        )
-                            )
-                            []
-
-                    else
-                        withArgument additionalInfo (\len -> BD.bytes len)
-            )
+concatBytes : List Bytes.Bytes -> Bytes.Bytes
+concatBytes chunks =
+    Bytes.Encode.encode
+        (Bytes.Encode.sequence (List.map Bytes.Encode.bytes chunks))
 
 
 decodeBytesRaw : BD.Decoder ctx DecodeError Bytes.Bytes
@@ -531,13 +518,338 @@ decodeBytesRaw =
                     BD.fail (WrongMajorType { expected = 2, got = majorType })
 
                 else
-                    let
-                        additionalInfo : Int
-                        additionalInfo =
-                            Bitwise.and 0x1F initialByte
-                    in
-                    withArgument additionalInfo (\len -> BD.bytes len)
+                    withArgument (Bitwise.and 0x1F initialByte) (\len -> BD.bytes len)
             )
+
+
+skipItems : Int -> BD.Decoder ctx DecodeError ()
+skipItems count =
+    BD.loop
+        (\remaining ->
+            if remaining <= 0 then
+                BD.succeed (BD.Done ())
+
+            else
+                itemBD |> BD.map (\_ -> BD.Loop (remaining - 1))
+        )
+        count
+
+
+skipEntries : Int -> BD.Decoder ctx DecodeError ()
+skipEntries count =
+    skipItems (count * 2)
+
+
+intToHex : Int -> String
+intToHex n =
+    let
+        hi : Int
+        hi =
+            Bitwise.shiftRightZfBy 4 n
+
+        lo : Int
+        lo =
+            Bitwise.and 0x0F n
+    in
+    String.fromChar (nibbleToHexChar hi) ++ String.fromChar (nibbleToHexChar lo)
+
+
+nibbleToHexChar : Int -> Char
+nibbleToHexChar n =
+    if n < 10 then
+        Char.fromCode (n + 0x30)
+
+    else
+        Char.fromCode (n - 10 + 0x61)
+
+
+intToTag : Int -> Tag
+intToTag n =
+    case n of
+        0 ->
+            StandardDateTime
+
+        1 ->
+            EpochDateTime
+
+        2 ->
+            PositiveBigNum
+
+        3 ->
+            NegativeBigNum
+
+        4 ->
+            DecimalFraction
+
+        5 ->
+            BigFloat
+
+        21 ->
+            Base64UrlConversion
+
+        22 ->
+            Base64Conversion
+
+        23 ->
+            Base16Conversion
+
+        24 ->
+            Cbor
+
+        32 ->
+            Uri
+
+        33 ->
+            Base64Url
+
+        34 ->
+            Base64
+
+        35 ->
+            Regex
+
+        36 ->
+            Mime
+
+        55799 ->
+            IsCbor
+
+        _ ->
+            Unknown n
+
+
+
+-- PRIMITIVES
+
+
+{-| Decode a CBOR integer (major types 0 and 1).
+
+Fails if the absolute value exceeds 2^52. For larger values, use `bigInt`.
+
+-}
+int : CborDecoder ctx Int
+int =
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
+
+                additionalInfo : Int
+                additionalInfo =
+                    Bitwise.and 0x1F initialByte
+            in
+            if majorType == 0 then
+                safeArgument additionalInfo
+
+            else if majorType == 1 then
+                safeArgument additionalInfo
+                    |> BD.map (\n -> -1 - n)
+
+            else
+                BD.fail (WrongMajorType { expected = 0, got = majorType })
+        )
+
+
+{-| Decode any CBOR integer, including bignums (tags 2 and 3).
+
+Returns `( Sign, Bytes )` where `Bytes` is the minimal big-endian
+representation of the unsigned argument.
+
+-}
+bigInt : CborDecoder ctx ( Sign, Bytes.Bytes )
+bigInt =
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
+
+                additionalInfo : Int
+                additionalInfo =
+                    Bitwise.and 0x1F initialByte
+            in
+            if majorType == 0 then
+                decodeArgumentBytes additionalInfo
+                    |> BD.map (\bs -> ( Positive, bs ))
+
+            else if majorType == 1 then
+                decodeArgumentBytes additionalInfo
+                    |> BD.map (\bs -> ( Negative, bs ))
+
+            else if majorType == 6 then
+                withArgument additionalInfo
+                    (\tagNum ->
+                        if tagNum == 2 then
+                            decodeBytesRaw
+                                |> BD.map (\bs -> ( Positive, bs ))
+
+                        else if tagNum == 3 then
+                            decodeBytesRaw
+                                |> BD.map (\bs -> ( Negative, bs ))
+
+                        else
+                            BD.fail (WrongTag { expected = 2, got = tagNum })
+                    )
+
+            else
+                BD.fail (WrongMajorType { expected = 0, got = majorType })
+        )
+
+
+{-| Decode a CBOR float (major type 7, additional info 25/26/27).
+-}
+float : CborDecoder ctx Float
+float =
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
+
+                additionalInfo : Int
+                additionalInfo =
+                    Bitwise.and 0x1F initialByte
+            in
+            if majorType /= 7 then
+                BD.fail (WrongMajorType { expected = 7, got = majorType })
+
+            else if additionalInfo == 25 then
+                BD.float16 Bytes.BE
+
+            else if additionalInfo == 26 then
+                BD.float32 Bytes.BE
+
+            else if additionalInfo == 27 then
+                BD.float64 Bytes.BE
+
+            else
+                BD.fail (WrongInitialByte { got = initialByte })
+        )
+
+
+{-| Decode a CBOR boolean (0xF4 for false, 0xF5 for true).
+-}
+bool : CborDecoder ctx Bool
+bool =
+    Item
+        (\initialByte ->
+            if initialByte == 0xF4 then
+                BD.succeed False
+
+            else if initialByte == 0xF5 then
+                BD.succeed True
+
+            else
+                BD.fail (WrongInitialByte { got = initialByte })
+        )
+
+
+{-| Decode a CBOR null (0xF6), returning the provided default value.
+-}
+null : a -> CborDecoder ctx a
+null default =
+    Item
+        (\initialByte ->
+            if initialByte == 0xF6 then
+                BD.succeed default
+
+            else
+                BD.fail (WrongInitialByte { got = initialByte })
+        )
+
+
+{-| Decode a CBOR text string (major type 3).
+
+Concatenates indefinite-length chunks transparently.
+
+-}
+string : CborDecoder ctx String
+string =
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
+            in
+            if majorType /= 3 then
+                BD.fail (WrongMajorType { expected = 3, got = majorType })
+
+            else
+                let
+                    additionalInfo : Int
+                    additionalInfo =
+                        Bitwise.and 0x1F initialByte
+                in
+                if additionalInfo == 31 then
+                    BD.loop
+                        (\chunks ->
+                            u8
+                                |> BD.andThen
+                                    (\byte ->
+                                        if byte == 0xFF then
+                                            BD.succeed (BD.Done (String.concat (List.reverse chunks)))
+
+                                        else
+                                            withArgument (Bitwise.and 0x1F byte)
+                                                (\len -> BD.string len)
+                                                |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
+                                    )
+                        )
+                        []
+
+                else
+                    withArgument additionalInfo (\len -> BD.string len)
+        )
+
+
+{-| Decode a CBOR byte string (major type 2).
+
+Concatenates indefinite-length chunks transparently.
+
+-}
+bytes : CborDecoder ctx Bytes.Bytes
+bytes =
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
+            in
+            if majorType /= 2 then
+                BD.fail (WrongMajorType { expected = 2, got = majorType })
+
+            else
+                let
+                    additionalInfo : Int
+                    additionalInfo =
+                        Bitwise.and 0x1F initialByte
+                in
+                if additionalInfo == 31 then
+                    BD.loop
+                        (\chunks ->
+                            u8
+                                |> BD.andThen
+                                    (\byte ->
+                                        if byte == 0xFF then
+                                            BD.succeed (BD.Done (concatBytes (List.reverse chunks)))
+
+                                        else
+                                            withArgument (Bitwise.and 0x1F byte)
+                                                (\len -> BD.bytes len)
+                                                |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
+                                    )
+                        )
+                        []
+
+                else
+                    withArgument additionalInfo (\len -> BD.bytes len)
+        )
 
 
 
@@ -546,41 +858,56 @@ decodeBytesRaw =
 
 {-| Decode a CBOR array (major type 4) where all elements use the same decoder.
 
-Handles both definite and indefinite-length arrays.
+Handles both definite and indefinite-length arrays. For indefinite-length,
+the element's initial byte is passed directly to its body function,
+staying on the fast `Decode.loop` path without `BD.oneOf`.
 
 -}
-array : BD.Decoder ctx DecodeError a -> BD.Decoder ctx DecodeError (List a)
+array : CborDecoder ctx a -> CborDecoder ctx (List a)
 array elementDecoder =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-                in
-                if majorType /= 4 then
-                    BD.fail (WrongMajorType { expected = 4, got = majorType })
+    let
+        elementBD =
+            toBD elementDecoder
+    in
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
 
-                else
-                    let
-                        additionalInfo : Int
-                        additionalInfo =
-                            Bitwise.and 0x1F initialByte
-                    in
-                    if additionalInfo == 31 then
+                additionalInfo : Int
+                additionalInfo =
+                    Bitwise.and 0x1F initialByte
+            in
+            if majorType /= 4 then
+                BD.fail (WrongMajorType { expected = 4, got = majorType })
+
+            else if additionalInfo == 31 then
+                case elementDecoder of
+                    Item elementBody ->
                         BD.loop
                             (\acc ->
-                                BD.oneOf
-                                    [ breakCode |> BD.map (\_ -> BD.Done (List.reverse acc))
-                                    , elementDecoder |> BD.map (\v -> BD.Loop (v :: acc))
-                                    ]
+                                u8
+                                    |> BD.andThen
+                                        (\byte ->
+                                            if byte == 0xFF then
+                                                BD.succeed (BD.Done (List.reverse acc))
+
+                                            else
+                                                elementBody byte
+                                                    |> BD.map (\v -> BD.Loop (v :: acc))
+                                        )
                             )
                             []
 
-                    else
-                        withArgument additionalInfo (\count -> BD.repeat elementDecoder count)
-            )
+                    Pure _ ->
+                        BD.fail (WrongInitialByte { got = initialByte })
+
+            else
+                withArgument additionalInfo
+                    (\count -> BD.repeat elementBD count)
+        )
 
 
 {-| Decode a CBOR map (major type 5) as a list of key-value pairs.
@@ -588,42 +915,60 @@ array elementDecoder =
 Handles both definite and indefinite-length maps.
 
 -}
-keyValue : BD.Decoder ctx DecodeError k -> BD.Decoder ctx DecodeError v -> BD.Decoder ctx DecodeError (List ( k, v ))
+keyValue : CborDecoder ctx k -> CborDecoder ctx v -> CborDecoder ctx (List ( k, v ))
 keyValue keyDecoder valueDecoder =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-                in
-                if majorType /= 5 then
-                    BD.fail (WrongMajorType { expected = 5, got = majorType })
+    let
+        valueBD =
+            toBD valueDecoder
 
-                else
-                    let
-                        additionalInfo : Int
-                        additionalInfo =
-                            Bitwise.and 0x1F initialByte
-                    in
-                    if additionalInfo == 31 then
+        keyBD =
+            toBD keyDecoder
+    in
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
+
+                additionalInfo : Int
+                additionalInfo =
+                    Bitwise.and 0x1F initialByte
+            in
+            if majorType /= 5 then
+                BD.fail (WrongMajorType { expected = 5, got = majorType })
+
+            else if additionalInfo == 31 then
+                case keyDecoder of
+                    Item keyBody ->
                         BD.loop
                             (\acc ->
-                                BD.oneOf
-                                    [ breakCode |> BD.map (\_ -> BD.Done (List.reverse acc))
-                                    , BD.map2 Tuple.pair keyDecoder valueDecoder
-                                        |> BD.map (\pair -> BD.Loop (pair :: acc))
-                                    ]
+                                u8
+                                    |> BD.andThen
+                                        (\byte ->
+                                            if byte == 0xFF then
+                                                BD.succeed (BD.Done (List.reverse acc))
+
+                                            else
+                                                BD.map2
+                                                    (\k v -> BD.Loop (( k, v ) :: acc))
+                                                    (keyBody byte)
+                                                    valueBD
+                                        )
                             )
                             []
 
-                    else
-                        withArgument additionalInfo
-                            (\count ->
-                                BD.repeat (BD.map2 Tuple.pair keyDecoder valueDecoder) count
-                            )
-            )
+                    Pure _ ->
+                        BD.fail (WrongInitialByte { got = initialByte })
+
+            else
+                withArgument additionalInfo
+                    (\count ->
+                        BD.repeat
+                            (BD.map2 Tuple.pair keyBD valueBD)
+                            count
+                    )
+        )
 
 
 {-| Decode the next map entry, expecting a specific key.
@@ -632,16 +977,16 @@ Reads the key, compares via `==`, then decodes the value on match.
 Fails on mismatch.
 
 -}
-field : k -> BD.Decoder ctx DecodeError k -> BD.Decoder ctx DecodeError v -> BD.Decoder ctx DecodeError v
+field : k -> CborDecoder ctx k -> CborDecoder ctx v -> CborDecoder ctx v
 field expectedKey keyDecoder valueDecoder =
     keyDecoder
-        |> BD.andThen
+        |> andThen
             (\key ->
                 if key == expectedKey then
                     valueDecoder
 
                 else
-                    BD.fail KeyMismatch
+                    fail KeyMismatch
             )
 
 
@@ -653,58 +998,83 @@ decodes the value and returns the updated accumulator.
 
 **Important**: the handler MUST decode exactly one value per call.
 
+The handler returns `BD.Decoder` (not `CborDecoder`) so it can decode
+different value types per key. Use `toBD` to convert value decoders:
+
+    handler key acc =
+        case key of
+            0 ->
+                toBD string |> BD.map (\name -> { acc | name = name })
+
+            1 ->
+                toBD int |> BD.map (\age -> { acc | age = age })
+
+            _ ->
+                toBD item |> BD.map (\_ -> acc)
+
 -}
 foldEntries :
-    BD.Decoder ctx DecodeError k
+    CborDecoder ctx k
     -> (k -> acc -> BD.Decoder ctx DecodeError acc)
     -> acc
-    -> BD.Decoder ctx DecodeError acc
+    -> CborDecoder ctx acc
 foldEntries keyDecoder handler initialAcc =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-                in
-                if majorType /= 5 then
-                    BD.fail (WrongMajorType { expected = 5, got = majorType })
+    let
+        keyBD =
+            toBD keyDecoder
+    in
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
 
-                else
-                    let
-                        additionalInfo : Int
-                        additionalInfo =
-                            Bitwise.and 0x1F initialByte
-                    in
-                    if additionalInfo == 31 then
+                additionalInfo : Int
+                additionalInfo =
+                    Bitwise.and 0x1F initialByte
+            in
+            if majorType /= 5 then
+                BD.fail (WrongMajorType { expected = 5, got = majorType })
+
+            else if additionalInfo == 31 then
+                case keyDecoder of
+                    Item keyBody ->
                         BD.loop
                             (\acc ->
-                                BD.oneOf
-                                    [ breakCode |> BD.map (\_ -> BD.Done acc)
-                                    , keyDecoder
-                                        |> BD.andThen (\key -> handler key acc)
-                                        |> BD.map BD.Loop
-                                    ]
+                                u8
+                                    |> BD.andThen
+                                        (\byte ->
+                                            if byte == 0xFF then
+                                                BD.succeed (BD.Done acc)
+
+                                            else
+                                                keyBody byte
+                                                    |> BD.andThen (\key -> handler key acc)
+                                                    |> BD.map BD.Loop
+                                        )
                             )
                             initialAcc
 
-                    else
-                        withArgument additionalInfo
-                            (\count ->
-                                BD.loop
-                                    (\( remaining, acc ) ->
-                                        if remaining <= 0 then
-                                            BD.succeed (BD.Done acc)
+                    Pure _ ->
+                        BD.fail (WrongInitialByte { got = initialByte })
 
-                                        else
-                                            keyDecoder
-                                                |> BD.andThen (\key -> handler key acc)
-                                                |> BD.map (\newAcc -> BD.Loop ( remaining - 1, newAcc ))
-                                    )
-                                    ( count, initialAcc )
+            else
+                withArgument additionalInfo
+                    (\count ->
+                        BD.loop
+                            (\( remaining, acc ) ->
+                                if remaining <= 0 then
+                                    BD.succeed (BD.Done acc)
+
+                                else
+                                    keyBD
+                                        |> BD.andThen (\key -> handler key acc)
+                                        |> BD.map (\newAcc -> BD.Loop ( remaining - 1, newAcc ))
                             )
-            )
+                            ( count, initialAcc )
+                    )
+        )
 
 
 {-| Decode a tagged CBOR value (major type 6).
@@ -712,34 +1082,36 @@ foldEntries keyDecoder handler initialAcc =
 Expects a specific tag, then decodes the enclosed item.
 
 -}
-tag : Tag -> BD.Decoder ctx DecodeError a -> BD.Decoder ctx DecodeError a
+tag : Tag -> CborDecoder ctx a -> CborDecoder ctx a
 tag expectedTag innerDecoder =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-                in
-                if majorType /= 6 then
-                    BD.fail (WrongMajorType { expected = 6, got = majorType })
+    let
+        innerBD =
+            toBD innerDecoder
+    in
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
 
-                else
-                    let
-                        additionalInfo : Int
-                        additionalInfo =
-                            Bitwise.and 0x1F initialByte
-                    in
-                    withArgument additionalInfo
-                        (\tagNum ->
-                            if tagNum == tagToInt expectedTag then
-                                innerDecoder
+                additionalInfo : Int
+                additionalInfo =
+                    Bitwise.and 0x1F initialByte
+            in
+            if majorType /= 6 then
+                BD.fail (WrongMajorType { expected = 6, got = majorType })
 
-                            else
-                                BD.fail (WrongTag { expected = tagToInt expectedTag, got = tagNum })
-                        )
-            )
+            else
+                withArgument additionalInfo
+                    (\tagNum ->
+                        if tagNum == tagToInt expectedTag then
+                            innerBD
+
+                        else
+                            BD.fail (WrongTag { expected = tagToInt expectedTag, got = tagNum })
+                    )
+        )
 
 
 
@@ -749,61 +1121,55 @@ tag expectedTag innerDecoder =
 {-| Decode a CBOR array header, returning the count or `Nothing` for
 indefinite-length.
 -}
-arrayHeader : BD.Decoder ctx DecodeError (Maybe Int)
+arrayHeader : CborDecoder ctx (Maybe Int)
 arrayHeader =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-                in
-                if majorType /= 4 then
-                    BD.fail (WrongMajorType { expected = 4, got = majorType })
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
 
-                else
-                    let
-                        additionalInfo : Int
-                        additionalInfo =
-                            Bitwise.and 0x1F initialByte
-                    in
-                    if additionalInfo == 31 then
-                        BD.succeed Nothing
+                additionalInfo : Int
+                additionalInfo =
+                    Bitwise.and 0x1F initialByte
+            in
+            if majorType /= 4 then
+                BD.fail (WrongMajorType { expected = 4, got = majorType })
 
-                    else
-                        withArgument additionalInfo (Just >> BD.succeed)
-            )
+            else if additionalInfo == 31 then
+                BD.succeed Nothing
+
+            else
+                withArgument additionalInfo (Just >> BD.succeed)
+        )
 
 
 {-| Decode a CBOR map header, returning the entry count or `Nothing` for
 indefinite-length.
 -}
-mapHeader : BD.Decoder ctx DecodeError (Maybe Int)
+mapHeader : CborDecoder ctx (Maybe Int)
 mapHeader =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-                in
-                if majorType /= 5 then
-                    BD.fail (WrongMajorType { expected = 5, got = majorType })
+    Item
+        (\initialByte ->
+            let
+                majorType : Int
+                majorType =
+                    Bitwise.shiftRightZfBy 5 initialByte
 
-                else
-                    let
-                        additionalInfo : Int
-                        additionalInfo =
-                            Bitwise.and 0x1F initialByte
-                    in
-                    if additionalInfo == 31 then
-                        BD.succeed Nothing
+                additionalInfo : Int
+                additionalInfo =
+                    Bitwise.and 0x1F initialByte
+            in
+            if majorType /= 5 then
+                BD.fail (WrongMajorType { expected = 5, got = majorType })
 
-                    else
-                        withArgument additionalInfo (Just >> BD.succeed)
-            )
+            else if additionalInfo == 31 then
+                BD.succeed Nothing
+
+            else
+                withArgument additionalInfo (Just >> BD.succeed)
+        )
 
 
 
@@ -811,9 +1177,14 @@ mapHeader =
 
 
 {-| Opaque builder for decoding CBOR arrays into Elm values.
+
+Uses `SimpleBuilder` when all fields are `element` (fast path via `keep`),
+or `CountedBuilder` when `optionalElement` is used (counts remaining items).
+
 -}
 type RecordBuilder ctx a
-    = RecordBuilder (Int -> BD.Decoder ctx DecodeError ( Int, a ))
+    = SimpleBuilder Int (CborDecoder ctx a)
+    | CountedBuilder (Int -> BD.Decoder ctx DecodeError ( Int, a ))
 
 
 {-| Start building a record decoder with the constructor function.
@@ -826,26 +1197,35 @@ type RecordBuilder ctx a
 -}
 record : a -> RecordBuilder ctx a
 record constructor =
-    RecordBuilder (\remaining -> BD.succeed ( remaining, constructor ))
+    SimpleBuilder 0 (succeed constructor)
 
 
 {-| Decode one array element, applying it to the constructor.
 -}
-element : BD.Decoder ctx DecodeError v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
-element valueDecoder (RecordBuilder innerDecoder) =
-    RecordBuilder
-        (\remaining ->
-            innerDecoder remaining
-                |> BD.andThen
-                    (\( rem, f ) ->
-                        if rem > 0 then
-                            valueDecoder
-                                |> BD.map (\v -> ( rem - 1, f v ))
+element : CborDecoder ctx v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
+element valueDecoder builder =
+    case builder of
+        SimpleBuilder count funcDecoder ->
+            SimpleBuilder (count + 1) (keep valueDecoder funcDecoder)
 
-                        else
-                            BD.fail TooFewElements
-                    )
-        )
+        CountedBuilder innerDecoder ->
+            let
+                valueBD =
+                    toBD valueDecoder
+            in
+            CountedBuilder
+                (\remaining ->
+                    innerDecoder remaining
+                        |> BD.andThen
+                            (\( rem, f ) ->
+                                if rem > 0 then
+                                    valueBD
+                                        |> BD.map (\v -> ( rem - 1, f v ))
+
+                                else
+                                    BD.fail TooFewElements
+                            )
+                )
 
 
 {-| Decode an optional array element, using the default if no items remain.
@@ -853,15 +1233,22 @@ element valueDecoder (RecordBuilder innerDecoder) =
 Optional elements must be at the end of the array.
 
 -}
-optionalElement : BD.Decoder ctx DecodeError v -> v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
-optionalElement valueDecoder default (RecordBuilder innerDecoder) =
-    RecordBuilder
+optionalElement : CborDecoder ctx v -> v -> RecordBuilder ctx (v -> a) -> RecordBuilder ctx a
+optionalElement valueDecoder default builder =
+    let
+        valueBD =
+            toBD valueDecoder
+
+        counted =
+            toCountedInner builder
+    in
+    CountedBuilder
         (\remaining ->
-            innerDecoder remaining
+            counted remaining
                 |> BD.andThen
                     (\( rem, f ) ->
                         if rem > 0 then
-                            valueDecoder
+                            valueBD
                                 |> BD.map (\v -> ( rem - 1, f v ))
 
                         else
@@ -870,33 +1257,72 @@ optionalElement valueDecoder default (RecordBuilder innerDecoder) =
         )
 
 
+toCountedInner : RecordBuilder ctx a -> (Int -> BD.Decoder ctx DecodeError ( Int, a ))
+toCountedInner builder =
+    case builder of
+        SimpleBuilder count decoder ->
+            let
+                decoderBD =
+                    toBD decoder
+            in
+            \remaining ->
+                decoderBD |> BD.map (\value -> ( remaining - count, value ))
+
+        CountedBuilder inner ->
+            inner
+
+
 {-| Finalize a record builder into a decoder.
 
 Reads the array header, runs the builder pipeline, and verifies all
 elements were consumed.
 
 -}
-buildRecord : RecordBuilder ctx a -> BD.Decoder ctx DecodeError a
-buildRecord (RecordBuilder decoder) =
-    arrayHeader
-        |> BD.andThen
-            (\maybeN ->
-                case maybeN of
-                    Just n ->
-                        decoder n
-                            |> BD.andThen
-                                (\( rem, value ) ->
-                                    if rem == 0 then
-                                        BD.succeed value
+buildRecord : RecordBuilder ctx a -> CborDecoder ctx a
+buildRecord builder =
+    case builder of
+        SimpleBuilder expectedCount decoder ->
+            arrayHeader
+                |> andThen
+                    (\maybeN ->
+                        case maybeN of
+                            Just n ->
+                                if n < expectedCount then
+                                    fail TooFewElements
 
-                                    else
-                                        skipItems rem
-                                            |> BD.map (\_ -> value)
+                                else if n == expectedCount then
+                                    decoder
+
+                                else
+                                    decoder
+                                        |> ignore (fromBD (skipItems (n - expectedCount)))
+
+                            Nothing ->
+                                fail IndefiniteLengthNotSupported
+                    )
+
+        CountedBuilder decoder ->
+            andThen
+                (\maybeN ->
+                    case maybeN of
+                        Just n ->
+                            fromBD
+                                (decoder n
+                                    |> BD.andThen
+                                        (\( rem, value ) ->
+                                            if rem == 0 then
+                                                BD.succeed value
+
+                                            else
+                                                skipItems rem
+                                                    |> BD.map (\_ -> value)
+                                        )
                                 )
 
-                    Nothing ->
-                        BD.fail IndefiniteLengthNotSupported
-            )
+                        Nothing ->
+                            fail IndefiniteLengthNotSupported
+                )
+                arrayHeader
 
 
 
@@ -906,7 +1332,7 @@ buildRecord (RecordBuilder decoder) =
 {-| Opaque builder for decoding CBOR maps into Elm values.
 -}
 type KeyedRecordBuilder ctx k a
-    = KeyedRecordBuilder (BD.Decoder ctx DecodeError k) (Int -> BD.Decoder ctx DecodeError (KeyedState k a))
+    = KeyedRecordBuilder (CborDecoder ctx k) (Int -> BD.Decoder ctx DecodeError (KeyedState k a))
 
 
 type alias KeyedState k a =
@@ -924,7 +1350,7 @@ type alias KeyedState k a =
         |> buildKeyedRecord
 
 -}
-keyedRecord : BD.Decoder ctx DecodeError k -> a -> KeyedRecordBuilder ctx k a
+keyedRecord : CborDecoder ctx k -> a -> KeyedRecordBuilder ctx k a
 keyedRecord keyDecoder constructor =
     KeyedRecordBuilder keyDecoder
         (\remaining ->
@@ -941,8 +1367,15 @@ keyedRecord keyDecoder constructor =
 The key order in the builder must match the key order in the CBOR data.
 
 -}
-required : k -> BD.Decoder ctx DecodeError v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
+required : k -> CborDecoder ctx v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
 required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
+    let
+        keyBD =
+            toBD keyDecoder
+
+        valueBD =
+            toBD valueDecoder
+    in
     KeyedRecordBuilder keyDecoder
         (\remaining ->
             innerDecoder remaining
@@ -953,12 +1386,12 @@ required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
                                 BD.succeed k
 
                             Nothing ->
-                                keyDecoder
+                                keyBD
                         )
                             |> BD.andThen
                                 (\key ->
                                     if key == expectedKey then
-                                        valueDecoder
+                                        valueBD
                                             |> BD.map
                                                 (\v ->
                                                     { remaining = state.remaining - 1
@@ -980,8 +1413,15 @@ If the next key doesn't match, the key is stashed for the next step
 and the default value is used.
 
 -}
-optional : k -> BD.Decoder ctx DecodeError v -> v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
+optional : k -> CborDecoder ctx v -> v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
 optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDecoder) =
+    let
+        keyBD =
+            toBD keyDecoder
+
+        valueBD =
+            toBD valueDecoder
+    in
     KeyedRecordBuilder keyDecoder
         (\remaining ->
             innerDecoder remaining
@@ -1000,12 +1440,12 @@ optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDe
                                     BD.succeed k
 
                                 Nothing ->
-                                    keyDecoder
+                                    keyBD
                             )
                                 |> BD.andThen
                                     (\key ->
                                         if key == expectedKey then
-                                            valueDecoder
+                                            valueBD
                                                 |> BD.map
                                                     (\v ->
                                                         { remaining = state.remaining - 1
@@ -1031,29 +1471,31 @@ Reads the map header, runs the builder pipeline, and verifies all
 entries were consumed.
 
 -}
-buildKeyedRecord : KeyedRecordBuilder ctx k a -> BD.Decoder ctx DecodeError a
+buildKeyedRecord : KeyedRecordBuilder ctx k a -> CborDecoder ctx a
 buildKeyedRecord (KeyedRecordBuilder _ decoder) =
     mapHeader
-        |> BD.andThen
+        |> andThen
             (\maybeN ->
                 case maybeN of
                     Just n ->
-                        decoder n
-                            |> BD.andThen
-                                (\state ->
-                                    if state.remaining == 0 && state.pendingKey == Nothing then
-                                        BD.succeed state.value
+                        Pure
+                            (decoder n
+                                |> BD.andThen
+                                    (\state ->
+                                        if state.remaining == 0 && state.pendingKey == Nothing then
+                                            BD.succeed state.value
 
-                                    else if state.pendingKey == Nothing then
-                                        skipEntries state.remaining
-                                            |> BD.map (\_ -> state.value)
+                                        else if state.pendingKey == Nothing then
+                                            skipEntries state.remaining
+                                                |> BD.map (\_ -> state.value)
 
-                                    else
-                                        BD.fail UnexpectedPendingKey
-                                )
+                                        else
+                                            BD.fail UnexpectedPendingKey
+                                    )
+                            )
 
                     Nothing ->
-                        BD.fail IndefiniteLengthNotSupported
+                        fail IndefiniteLengthNotSupported
             )
 
 
@@ -1067,14 +1509,18 @@ This is the full CBOR parser. Handles all major types, nested structures,
 tags, indefinite-length containers, etc.
 
 -}
-item : BD.Decoder ctx DecodeError CborItem
+item : CborDecoder ctx CborItem
 item =
-    u8
-        |> BD.andThen decodeItemBody
+    Item itemBody
 
 
-decodeItemBody : Int -> BD.Decoder ctx DecodeError CborItem
-decodeItemBody initialByte =
+itemBD : BD.Decoder ctx DecodeError CborItem
+itemBD =
+    u8 |> BD.andThen itemBody
+
+
+itemBody : Int -> BD.Decoder ctx DecodeError CborItem
+itemBody initialByte =
     let
         majorType : Int
         majorType =
@@ -1189,7 +1635,7 @@ decodeItemBody initialByte =
                                         BD.succeed (BD.Done (CborArray Indefinite (List.reverse items)))
 
                                     else
-                                        decodeItemBody byte
+                                        itemBody byte
                                             |> BD.map (\v -> BD.Loop (v :: items))
                                 )
                     )
@@ -1198,7 +1644,7 @@ decodeItemBody initialByte =
             else
                 withArgument additionalInfo
                     (\count ->
-                        BD.repeat item count
+                        BD.repeat itemBD count
                             |> BD.map (\items -> CborArray Definite items)
                     )
 
@@ -1216,8 +1662,8 @@ decodeItemBody initialByte =
                                     else
                                         BD.map2
                                             (\k v -> BD.Loop ({ key = k, value = v } :: entries))
-                                            (decodeItemBody byte)
-                                            item
+                                            (itemBody byte)
+                                            itemBD
                                 )
                     )
                     []
@@ -1225,7 +1671,7 @@ decodeItemBody initialByte =
             else
                 withArgument additionalInfo
                     (\count ->
-                        BD.repeat (BD.map2 (\k v -> { key = k, value = v }) item item) count
+                        BD.repeat (BD.map2 (\k v -> { key = k, value = v }) itemBD itemBD) count
                             |> BD.map (\entries -> CborMap Definite entries)
                     )
 
@@ -1233,7 +1679,7 @@ decodeItemBody initialByte =
             -- Tag
             withArgument additionalInfo
                 (\tagNum ->
-                    item
+                    itemBD
                         |> BD.map (\enclosed -> CborTag (intToTag tagNum) enclosed)
                 )
 
@@ -1271,124 +1717,3 @@ decodeItemBody initialByte =
 
         _ ->
             BD.fail (UnknownMajorType majorType)
-
-
-
--- INTERNAL HELPERS
-
-
-{-| Decode a break code (0xFF). Used in oneOf for indefinite-length containers.
--}
-breakCode : BD.Decoder ctx DecodeError ()
-breakCode =
-    u8
-        |> BD.andThen
-            (\byte ->
-                if byte == 0xFF then
-                    BD.succeed ()
-
-                else
-                    BD.fail (WrongInitialByte { got = byte })
-            )
-
-
-concatBytes : List Bytes.Bytes -> Bytes.Bytes
-concatBytes chunks =
-    Bytes.Encode.encode
-        (Bytes.Encode.sequence (List.map Bytes.Encode.bytes chunks))
-
-
-skipItems : Int -> BD.Decoder ctx DecodeError ()
-skipItems count =
-    BD.loop
-        (\remaining ->
-            if remaining <= 0 then
-                BD.succeed (BD.Done ())
-
-            else
-                item |> BD.map (\_ -> BD.Loop (remaining - 1))
-        )
-        count
-
-
-skipEntries : Int -> BD.Decoder ctx DecodeError ()
-skipEntries count =
-    skipItems (count * 2)
-
-
-intToHex : Int -> String
-intToHex n =
-    let
-        hi : Int
-        hi =
-            Bitwise.shiftRightZfBy 4 n
-
-        lo : Int
-        lo =
-            Bitwise.and 0x0F n
-    in
-    String.fromChar (nibbleToHexChar hi) ++ String.fromChar (nibbleToHexChar lo)
-
-
-nibbleToHexChar : Int -> Char
-nibbleToHexChar n =
-    if n < 10 then
-        Char.fromCode (n + 0x30)
-
-    else
-        Char.fromCode (n - 10 + 0x61)
-
-
-intToTag : Int -> Tag
-intToTag n =
-    case n of
-        0 ->
-            StandardDateTime
-
-        1 ->
-            EpochDateTime
-
-        2 ->
-            PositiveBigNum
-
-        3 ->
-            NegativeBigNum
-
-        4 ->
-            DecimalFraction
-
-        5 ->
-            BigFloat
-
-        21 ->
-            Base64UrlConversion
-
-        22 ->
-            Base64Conversion
-
-        23 ->
-            Base16Conversion
-
-        24 ->
-            Cbor
-
-        32 ->
-            Uri
-
-        33 ->
-            Base64Url
-
-        34 ->
-            Base64
-
-        35 ->
-            Regex
-
-        36 ->
-            Mime
-
-        55799 ->
-            IsCbor
-
-        _ ->
-            Unknown n

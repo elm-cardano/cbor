@@ -1499,81 +1499,96 @@ type PlutusNested
 -- ============================================================================
 
 
-decodeCertCurrent : BD.Decoder ctx CD.DecodeError Certificate
+decodeCertCurrent : CD.CborDecoder ctx Certificate
 decodeCertCurrent =
     CD.arrayHeader
-        |> BD.andThen
+        |> CD.andThen
             (\_ ->
                 CD.int
-                    |> BD.andThen
+                    |> CD.andThen
                         (\t ->
                             case t of
                                 0 ->
-                                    BD.map Registration CD.int
+                                    CD.map Registration CD.int
 
                                 2 ->
-                                    BD.map2 Delegation CD.int CD.int
+                                    CD.map2 Delegation CD.int CD.int
 
                                 _ ->
-                                    BD.fail (WrongInitialByte { got = t })
+                                    CD.fail (WrongInitialByte { got = t })
                         )
             )
 
 
 decodePlutusCurrent : BD.Decoder ctx CD.DecodeError PlutusNested
 decodePlutusCurrent =
+    CD.toBD decodePlutusCborCurrent
+
+
+decodePlutusCborCurrent : CD.CborDecoder ctx PlutusNested
+decodePlutusCborCurrent =
     let
-        self : BD.Decoder ctx CD.DecodeError PlutusNested
+        self : CD.CborDecoder ctx PlutusNested
         self =
-            BD.andThen (\() -> decodePlutusCurrent) (BD.succeed ())
+            CD.lazy (\() -> decodePlutusCborCurrent)
     in
-    BD.oneOf
-        [ CD.tag (Unknown 121) (CD.array self) |> BD.map PNConstr
-        , CD.keyValue self self |> BD.map PNMap
-        , CD.array self |> BD.map PNArray
-        , CD.int |> BD.map PNInt
-        , CD.bytes |> BD.map PNBytes
+    CD.oneOf
+        [ CD.tag (Unknown 121) (CD.array self) |> CD.map PNConstr
+        , CD.keyValue self self |> CD.map PNMap
+        , CD.array self |> CD.map PNArray
+        , CD.int |> CD.map PNInt
+        , CD.bytes |> CD.map PNBytes
         ]
 
 
 decR10Current : BD.Decoder ctx CD.DecodeError R10
 decR10Current =
-    CD.record R10
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.element CD.int
-        |> CD.buildRecord
+    CD.toBD
+        (CD.record R10
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.element CD.int
+            |> CD.buildRecord
+        )
 
 
 decKR10Current : BD.Decoder ctx CD.DecodeError R10
 decKR10Current =
-    CD.keyedRecord CD.int R10
-        |> CD.required 0 CD.int
-        |> CD.required 1 CD.int
-        |> CD.required 2 CD.int
-        |> CD.required 3 CD.int
-        |> CD.required 4 CD.int
-        |> CD.required 5 CD.int
-        |> CD.required 6 CD.int
-        |> CD.required 7 CD.int
-        |> CD.required 8 CD.int
-        |> CD.required 9 CD.int
-        |> CD.buildKeyedRecord
+    CD.toBD
+        (CD.keyedRecord CD.int R10
+            |> CD.required 0 CD.int
+            |> CD.required 1 CD.int
+            |> CD.required 2 CD.int
+            |> CD.required 3 CD.int
+            |> CD.required 4 CD.int
+            |> CD.required 5 CD.int
+            |> CD.required 6 CD.int
+            |> CD.required 7 CD.int
+            |> CD.required 8 CD.int
+            |> CD.required 9 CD.int
+            |> CD.buildKeyedRecord
+        )
 
 
 decFoldCurrent : BD.Decoder ctx CD.DecodeError (List ( Int, Int ))
 decFoldCurrent =
-    CD.foldEntries CD.int
-        (\key acc -> CD.int |> BD.map (\v -> ( key, v ) :: acc))
-        []
-        |> BD.map List.reverse
+    let
+        intBD =
+            CD.toBD CD.int
+    in
+    CD.toBD
+        (CD.foldEntries CD.int
+            (\key acc -> intBD |> BD.map (\v -> ( key, v ) :: acc))
+            []
+            |> CD.map List.reverse
+        )
 
 
 
@@ -1665,18 +1680,20 @@ decFoldIP =
 
 decOptRCurrent : BD.Decoder ctx CD.DecodeError OptR
 decOptRCurrent =
-    CD.record OptR
-        |> CD.optionalElement CD.int 0
-        |> CD.optionalElement CD.int 0
-        |> CD.optionalElement CD.int 0
-        |> CD.optionalElement CD.int 0
-        |> CD.optionalElement CD.int 0
-        |> CD.optionalElement CD.int 0
-        |> CD.optionalElement CD.int 0
-        |> CD.optionalElement CD.int 0
-        |> CD.optionalElement CD.int 0
-        |> CD.optionalElement CD.int 0
-        |> CD.buildRecord
+    CD.toBD
+        (CD.record OptR
+            |> CD.optionalElement CD.int 0
+            |> CD.optionalElement CD.int 0
+            |> CD.optionalElement CD.int 0
+            |> CD.optionalElement CD.int 0
+            |> CD.optionalElement CD.int 0
+            |> CD.optionalElement CD.int 0
+            |> CD.optionalElement CD.int 0
+            |> CD.optionalElement CD.int 0
+            |> CD.optionalElement CD.int 0
+            |> CD.optionalElement CD.int 0
+            |> CD.buildRecord
+        )
 
 
 decOptRIP : CborDecoder ctx OptR
@@ -1868,7 +1885,7 @@ itemTestData =
 
 dec_indef_array_current : () -> Maybe (List Int)
 dec_indef_array_current () =
-    BD.decode (CD.array CD.int) indefIntArray100 |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array CD.int)) indefIntArray100 |> Result.toMaybe
 
 
 dec_indef_array_ip : () -> Maybe (List Int)
@@ -1878,7 +1895,7 @@ dec_indef_array_ip () =
 
 dec_indef_map_current : () -> Maybe (List ( Int, Int ))
 dec_indef_map_current () =
-    BD.decode (CD.keyValue CD.int CD.int) indefIntMap100 |> Result.toMaybe
+    BD.decode (CD.toBD (CD.keyValue CD.int CD.int)) indefIntMap100 |> Result.toMaybe
 
 
 dec_indef_map_ip : () -> Maybe (List ( Int, Int ))
@@ -1898,7 +1915,7 @@ dec_indef_fold_ip () =
 
 dec_indef_nested_current : () -> Maybe (List (List Int))
 dec_indef_nested_current () =
-    BD.decode (CD.array (CD.array CD.int)) indefNestedArraysData |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array (CD.array CD.int))) indefNestedArraysData |> Result.toMaybe
 
 
 dec_indef_nested_ip : () -> Maybe (List (List Int))
@@ -1914,7 +1931,7 @@ dec_indef_nested_ip () =
 
 dec_indef_cert_current : () -> Maybe (List Certificate)
 dec_indef_cert_current () =
-    BD.decode (CD.array decodeCertCurrent) indefCert20Data |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array decodeCertCurrent)) indefCert20Data |> Result.toMaybe
 
 
 dec_indef_cert_ip : () -> Maybe (List Certificate)
@@ -1924,7 +1941,7 @@ dec_indef_cert_ip () =
 
 dec_plutus_indef_5_current : () -> Maybe PlutusNested
 dec_plutus_indef_5_current () =
-    BD.decode decodePlutusCurrent plutusIndefData5 |> Result.toMaybe
+    BD.decode (CD.toBD decodePlutusCborCurrent) plutusIndefData5 |> Result.toMaybe
 
 
 dec_plutus_indef_5_ip : () -> Maybe PlutusNested
@@ -1940,7 +1957,7 @@ dec_plutus_indef_5_ip () =
 
 dec_def_array_current : () -> Maybe (List Int)
 dec_def_array_current () =
-    BD.decode (CD.array CD.int) defIntArray100 |> Result.toMaybe
+    BD.decode (CD.toBD (CD.array CD.int)) defIntArray100 |> Result.toMaybe
 
 
 dec_def_array_ip : () -> Maybe (List Int)
@@ -1950,7 +1967,7 @@ dec_def_array_ip () =
 
 dec_def_map_current : () -> Maybe (List ( Int, Int ))
 dec_def_map_current () =
-    BD.decode (CD.keyValue CD.int CD.int) defIntMap100 |> Result.toMaybe
+    BD.decode (CD.toBD (CD.keyValue CD.int CD.int)) defIntMap100 |> Result.toMaybe
 
 
 dec_def_map_ip : () -> Maybe (List ( Int, Int ))
@@ -1980,7 +1997,7 @@ dec_keyed_10_ip () =
 
 dec_item_current : () -> Maybe CborItem
 dec_item_current () =
-    BD.decode CD.item itemTestData |> Result.toMaybe
+    BD.decode (CD.toBD CD.item) itemTestData |> Result.toMaybe
 
 
 dec_item_ip : () -> Maybe CborItem
