@@ -208,17 +208,13 @@ string s =
     Encoder
         (\_ ->
             let
-                encoded : Bytes.Bytes
-                encoded =
-                    BE.encode (BE.string s)
-
                 len : Int
                 len =
-                    Bytes.width encoded
+                    BE.getStringWidth s
             in
             BE.sequence
                 [ encodeHeader 3 len
-                , BE.bytes encoded
+                , BE.string s
                 ]
         )
 
@@ -306,27 +302,23 @@ stringChunked chunks =
     Encoder
         (\_ ->
             BE.sequence
-                (BE.unsignedInt8 0x7F
-                    :: List.map encodeStringChunk chunks
-                    ++ [ BE.unsignedInt8 0xFF ]
-                )
+                [ BE.unsignedInt8 0x7F
+                , BE.sequence (List.map encodeStringChunk chunks)
+                , BE.unsignedInt8 0xFF
+                ]
         )
 
 
 encodeStringChunk : String -> BE.Encoder
 encodeStringChunk s =
     let
-        encoded : Bytes.Bytes
-        encoded =
-            BE.encode (BE.string s)
-
         len : Int
         len =
-            Bytes.width encoded
+            BE.getStringWidth s
     in
     BE.sequence
         [ encodeHeader 3 len
-        , BE.bytes encoded
+        , BE.string s
         ]
 
 
@@ -337,10 +329,10 @@ bytesChunked chunks =
     Encoder
         (\_ ->
             BE.sequence
-                (BE.unsignedInt8 0x5F
-                    :: List.map encodeByteChunk chunks
-                    ++ [ BE.unsignedInt8 0xFF ]
-                )
+                [ BE.unsignedInt8 0x5F
+                , BE.sequence (List.map encodeByteChunk chunks)
+                , BE.unsignedInt8 0xFF
+                ]
         )
 
 
@@ -376,10 +368,10 @@ array items =
 
                 Indefinite ->
                     BE.sequence
-                        (BE.unsignedInt8 0x9F
-                            :: encodedItems
-                            ++ [ BE.unsignedInt8 0xFF ]
-                        )
+                        [ BE.unsignedInt8 0x9F
+                        , BE.sequence encodedItems
+                        , BE.unsignedInt8 0xFF
+                        ]
         )
 
 
@@ -427,10 +419,10 @@ map entries =
 
                 Indefinite ->
                     BE.sequence
-                        (BE.unsignedInt8 0xBF
-                            :: entryEncoders
-                            ++ [ BE.unsignedInt8 0xFF ]
-                        )
+                        [ BE.unsignedInt8 0xBF
+                        , BE.sequence entryEncoders
+                        , BE.unsignedInt8 0xFF
+                        ]
         )
 
 
@@ -559,10 +551,8 @@ encodeHeader majorType argument =
         BE.unsignedInt8 (mt + argument)
 
     else if argument <= 0xFF then
-        BE.sequence
-            [ BE.unsignedInt8 (mt + 24)
-            , BE.unsignedInt8 argument
-            ]
+        BE.unsignedInt16 Bytes.BE
+            (Bitwise.or (Bitwise.shiftLeftBy 8 (mt + 24)) argument)
 
     else if argument <= 0xFFFF then
         BE.sequence
@@ -642,7 +632,7 @@ encodeHeaderWithWidth width majorType argument =
 
 encodeFloat : Float -> BE.Encoder
 encodeFloat f =
-    if float16RoundTrips f then
+    if (isNaN f || isInfinite f || abs f <= 65504) && float16RoundTrips f then
         BE.sequence
             [ BE.unsignedInt8 0xF9
             , Bytes.Floating.Encode.float16 Bytes.BE f
@@ -738,8 +728,9 @@ encodeItem cborItem =
 
         CborByteStringChunked chunks ->
             BE.sequence
-                (BE.unsignedInt8 0x5F
-                    :: List.map
+                [ BE.unsignedInt8 0x5F
+                , BE.sequence
+                    (List.map
                         (\bs ->
                             BE.sequence
                                 [ encodeHeader 2 (Bytes.width bs)
@@ -747,38 +738,41 @@ encodeItem cborItem =
                                 ]
                         )
                         chunks
-                    ++ [ BE.unsignedInt8 0xFF ]
-                )
+                    )
+                , BE.unsignedInt8 0xFF
+                ]
 
         CborString s ->
             let
-                encoded : Bytes.Bytes
-                encoded =
-                    BE.encode (BE.string s)
+                len : Int
+                len =
+                    BE.getStringWidth s
             in
             BE.sequence
-                [ encodeHeader 3 (Bytes.width encoded)
-                , BE.bytes encoded
+                [ encodeHeader 3 len
+                , BE.string s
                 ]
 
         CborStringChunked chunks ->
             BE.sequence
-                (BE.unsignedInt8 0x7F
-                    :: List.map
+                [ BE.unsignedInt8 0x7F
+                , BE.sequence
+                    (List.map
                         (\s ->
                             let
-                                encoded : Bytes.Bytes
-                                encoded =
-                                    BE.encode (BE.string s)
+                                len : Int
+                                len =
+                                    BE.getStringWidth s
                             in
                             BE.sequence
-                                [ encodeHeader 3 (Bytes.width encoded)
-                                , BE.bytes encoded
+                                [ encodeHeader 3 len
+                                , BE.string s
                                 ]
                         )
                         chunks
-                    ++ [ BE.unsignedInt8 0xFF ]
-                )
+                    )
+                , BE.unsignedInt8 0xFF
+                ]
 
         CborArray length items ->
             case length of
@@ -787,33 +781,35 @@ encodeItem cborItem =
 
                 Indefinite ->
                     BE.sequence
-                        (BE.unsignedInt8 0x9F
-                            :: List.map encodeItem items
-                            ++ [ BE.unsignedInt8 0xFF ]
-                        )
+                        [ BE.unsignedInt8 0x9F
+                        , BE.sequence (List.map encodeItem items)
+                        , BE.unsignedInt8 0xFF
+                        ]
 
         CborMap length entries ->
+            let
+                entryEncoders : List BE.Encoder
+                entryEncoders =
+                    List.foldr
+                        (\e acc ->
+                            encodeItem e.key :: encodeItem e.value :: acc
+                        )
+                        []
+                        entries
+            in
             case length of
                 Definite ->
                     BE.sequence
                         (encodeHeader 5 (List.length entries)
-                            :: List.concatMap
-                                (\e ->
-                                    [ encodeItem e.key, encodeItem e.value ]
-                                )
-                                entries
+                            :: entryEncoders
                         )
 
                 Indefinite ->
                     BE.sequence
-                        (BE.unsignedInt8 0xBF
-                            :: List.concatMap
-                                (\e ->
-                                    [ encodeItem e.key, encodeItem e.value ]
-                                )
-                                entries
-                            ++ [ BE.unsignedInt8 0xFF ]
-                        )
+                        [ BE.unsignedInt8 0xBF
+                        , BE.sequence entryEncoders
+                        , BE.unsignedInt8 0xFF
+                        ]
 
         CborTag t enclosed ->
             BE.sequence

@@ -212,3 +212,58 @@ Adopted as the new default for `deterministic`, `canonical`, and `ctap2`.
 
 Symmetric trade-off (~50% each way). **V1 kept** — small integers
 (float16-representable) are common in Cardano CBOR data.
+
+
+### Encoder optimizations (opportunities 1–5)
+
+Five micro-optimizations applied to `Cbor.Encode` internals.
+
+#### 1. String encoding: `getStringWidth` (no intermediate buffer)
+
+```
+  enc_string_v1    ████████████████████   332129 ns/run   baseline
+  enc_string_v2    █████████████          222452 ns/run   33% faster
+  enc_string_v2b   ████████████           200625 ns/run   40% faster
+```
+
+**V2b adopted** (40% faster). Uses `BE.getStringWidth` + packed header.
+
+#### 2. Header packing: `unsignedInt16` for argument 24–255
+
+```
+  enc_header_v1   ████████████████████   82090 ns/run   baseline
+  enc_header_v2   ██████████████         58689 ns/run   29% faster
+```
+
+**V2 adopted** (29% faster). Packs initial byte + argument into a single `U16`.
+
+#### 3. Break appending: nested sequence vs `++ [break]`
+
+```
+  enc_indef_v1_100    ████████████████████   1095 ns/run    baseline
+  enc_indef_v2_100    ██████████████████     976 ns/run     11% faster
+
+  enc_indef_v1_1000   ████████████████████   10159 ns/run   baseline
+  enc_indef_v2_1000   ████████████████       8253 ns/run    19% faster
+```
+
+**V2 adopted** (11-19% faster). Wraps items in a nested `BE.sequence`.
+
+#### 4. Map entries: `List.foldr` vs `List.concatMap`
+
+```
+  enc_mapfold_v1_100   ████████████████████   10176 ns/run   baseline
+  enc_mapfold_v2_100   █████████████████      8746 ns/run    14% faster
+```
+
+**V2 adopted** (14% faster). Builds flat list directly with cons.
+
+#### 5. Float fast-reject: range guard before float16 round-trip
+
+```
+  enc_guard_v1   ████████████████████   481971 ns/run   baseline
+  enc_guard_v2   ██████████             248229 ns/run   48% faster
+```
+
+**V2 adopted** (48% faster). Skips float16 round-trip when `abs f > 65504`.
+Special values (NaN, ±Infinity) bypass the guard.

@@ -579,7 +579,7 @@ float16. The `abs` + comparison is a single CPU instruction vs two
 -}
 floatV3 : Float -> CE.Encoder
 floatV3 f =
-    if abs f <= 65504 && float16RoundTrips f then
+    if (isNaN f || isInfinite f || abs f <= 65504) && float16RoundTrips f then
         CE.floatWithWidth FW16 f
 
     else if float32RoundTrips f then
