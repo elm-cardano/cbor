@@ -309,7 +309,9 @@ tlTuple10Encoder =
 
 ecKeyed10Encoder : R10 -> CE.Encoder
 ecKeyed10Encoder r =
-    CE.keyedRecord CE.Unsorted Definite CE.int
+    CE.keyedRecord CE.Unsorted
+        Definite
+        CE.int
         [ ( 0, Just (CE.int r.a) )
         , ( 1, Just (CE.int r.b) )
         , ( 2, Just (CE.int r.c) )
