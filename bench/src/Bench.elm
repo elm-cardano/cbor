@@ -65,7 +65,7 @@ elm-bench -f Bench.enc_direct_list100 -f Bench.enc_item_list100 "()"
 
 # Float shortest-form detection
 
-The encoder tries float16, then float32, then float64 (up to 3 roundtrip checks per float).
+The encoder tries float32 first, then float16 within range (up to 2 roundtrip checks per float).
 
 ```sh
 elm-bench -f Bench.enc_float_f16_1000 -f Bench.enc_float_f32_1000 -f Bench.enc_float_f64_1000 -f Bench.enc_float_explicit64_1000 "()"
@@ -148,43 +148,39 @@ import Cbor.Encode as CE
 -- ============================================================================
 -- TEST DATA
 -- ============================================================================
--- Map encoders (pre-built, encoding benchmarks measure CE.encode only)
+-- Map entry lists (pre-built; encoding benchmarks measure CE.map + CE.encode)
 
 
-mapIntEncoder : Int -> CE.Encoder
-mapIntEncoder n =
-    CE.map
-        (List.map (\i -> ( CE.int i, CE.int (i * 7 + 3) ))
-            (List.range 0 (n - 1))
-        )
+mapIntEntries : Int -> List ( CE.Encoder, CE.Encoder )
+mapIntEntries n =
+    List.map (\i -> ( CE.int i, CE.int (i * 7 + 3) ))
+        (List.range 0 (n - 1))
 
 
-mapIntEncoder10 : CE.Encoder
-mapIntEncoder10 =
-    mapIntEncoder 10
+mapIntEntries10 : List ( CE.Encoder, CE.Encoder )
+mapIntEntries10 =
+    mapIntEntries 10
 
 
-mapIntEncoder100 : CE.Encoder
-mapIntEncoder100 =
-    mapIntEncoder 100
+mapIntEntries100 : List ( CE.Encoder, CE.Encoder )
+mapIntEntries100 =
+    mapIntEntries 100
 
 
-mapIntEncoder1000 : CE.Encoder
-mapIntEncoder1000 =
-    mapIntEncoder 1000
+mapIntEntries1000 : List ( CE.Encoder, CE.Encoder )
+mapIntEntries1000 =
+    mapIntEntries 1000
 
 
-mapStrEncoder100 : CE.Encoder
-mapStrEncoder100 =
-    CE.map
-        (List.map
-            (\i ->
-                ( CE.string (String.padLeft 32 '0' (String.fromInt i))
-                , CE.int i
-                )
+mapStrEntries100 : List ( CE.Encoder, CE.Encoder )
+mapStrEntries100 =
+    List.map
+        (\i ->
+            ( CE.string (String.padLeft 32 '0' (String.fromInt i))
+            , CE.int i
             )
-            (List.range 0 99)
         )
+        (List.range 0 99)
 
 
 
@@ -193,40 +189,40 @@ mapStrEncoder100 =
 
 record3Data : Bytes
 record3Data =
-    CE.encode CE.unsorted (CE.list CE.int [ 1, 2, 3 ])
+    CE.encode (CE.list Definite CE.int [ 1, 2, 3 ])
 
 
 record10Data : Bytes
 record10Data =
-    CE.encode CE.unsorted (CE.list CE.int (List.range 1 10))
+    CE.encode (CE.list Definite CE.int (List.range 1 10))
 
 
 record30Data : Bytes
 record30Data =
-    CE.encode CE.unsorted (CE.list CE.int (List.range 1 30))
+    CE.encode (CE.list Definite CE.int (List.range 1 30))
 
 
 array100Data : Bytes
 array100Data =
-    CE.encode CE.unsorted (CE.list CE.int (List.range 0 99))
+    CE.encode (CE.list Definite CE.int (List.range 0 99))
 
 
 keyedRecord3Data : Bytes
 keyedRecord3Data =
-    CE.encode CE.unsorted
-        (CE.map (List.map (\i -> ( CE.int i, CE.int (i * 3) )) (List.range 0 2)))
+    CE.encode
+        (CE.map CE.Unsorted Definite (List.map (\i -> ( CE.int i, CE.int (i * 3) )) (List.range 0 2)))
 
 
 keyedRecord10Data : Bytes
 keyedRecord10Data =
-    CE.encode CE.unsorted
-        (CE.map (List.map (\i -> ( CE.int i, CE.int (i * 7) )) (List.range 0 9)))
+    CE.encode
+        (CE.map CE.Unsorted Definite (List.map (\i -> ( CE.int i, CE.int (i * 7) )) (List.range 0 9)))
 
 
 keyedRecord30Data : Bytes
 keyedRecord30Data =
-    CE.encode CE.unsorted
-        (CE.map (List.map (\i -> ( CE.int i, CE.int (i * 3) )) (List.range 0 29)))
+    CE.encode
+        (CE.map CE.Unsorted Definite (List.map (\i -> ( CE.int i, CE.int (i * 3) )) (List.range 0 29)))
 
 
 
@@ -235,7 +231,7 @@ keyedRecord30Data =
 
 listEncoder100 : CE.Encoder
 listEncoder100 =
-    CE.list CE.int (List.range 0 99)
+    CE.list Definite CE.int (List.range 0 99)
 
 
 listItemEncoder100 : CE.Encoder
@@ -302,12 +298,12 @@ singleByte =
 
 oneOfFirstData : Bytes
 oneOfFirstData =
-    CE.encode CE.unsorted (CE.tag (Unknown 121) (CE.list CE.int [ 42 ]))
+    CE.encode (CE.tag (Unknown 121) (CE.list Definite CE.int [ 42 ]))
 
 
 oneOfLastData : Bytes
 oneOfLastData =
-    CE.encode CE.unsorted (CE.bytes singleByte)
+    CE.encode (CE.bytes singleByte)
 
 
 makeNestedArray : Int -> CE.Encoder
@@ -316,22 +312,22 @@ makeNestedArray depth =
         CE.int 42
 
     else
-        CE.list identity [ makeNestedArray (depth - 1) ]
+        CE.list Definite identity [ makeNestedArray (depth - 1) ]
 
 
 nestedData1 : Bytes
 nestedData1 =
-    CE.encode CE.unsorted (makeNestedArray 1)
+    CE.encode (makeNestedArray 1)
 
 
 nestedData5 : Bytes
 nestedData5 =
-    CE.encode CE.unsorted (makeNestedArray 5)
+    CE.encode (makeNestedArray 5)
 
 
 nestedData10 : Bytes
 nestedData10 =
-    CE.encode CE.unsorted (makeNestedArray 10)
+    CE.encode (makeNestedArray 10)
 
 
 
@@ -522,69 +518,69 @@ decFold =
 -- ============================================================================
 -- 1. MAP KEY SORTING COST
 -- ============================================================================
--- Measures the cost of key sorting during map encoding.
+-- Measures the cost of key sorting during map construction and encoding.
 -- unsorted = baseline (no sorting), deterministic/canonical add sort overhead.
--- The encoder is pre-built; benchmark measures CE.encode only.
+-- Entry lists are pre-built; benchmark measures CE.map + CE.encode.
 
 
 enc_map_unsorted_10 : () -> Bytes
 enc_map_unsorted_10 () =
-    CE.encode CE.unsorted mapIntEncoder10
+    CE.encode (CE.map CE.Unsorted Definite mapIntEntries10)
 
 
 enc_map_deterministic_10 : () -> Bytes
 enc_map_deterministic_10 () =
-    CE.encode CE.deterministic mapIntEncoder10
+    CE.encode (CE.map CE.deterministicSort Definite mapIntEntries10)
 
 
 enc_map_canonical_10 : () -> Bytes
 enc_map_canonical_10 () =
-    CE.encode CE.canonical mapIntEncoder10
+    CE.encode (CE.map CE.canonicalSort Definite mapIntEntries10)
 
 
 enc_map_unsorted_100 : () -> Bytes
 enc_map_unsorted_100 () =
-    CE.encode CE.unsorted mapIntEncoder100
+    CE.encode (CE.map CE.Unsorted Definite mapIntEntries100)
 
 
 enc_map_deterministic_100 : () -> Bytes
 enc_map_deterministic_100 () =
-    CE.encode CE.deterministic mapIntEncoder100
+    CE.encode (CE.map CE.deterministicSort Definite mapIntEntries100)
 
 
 enc_map_canonical_100 : () -> Bytes
 enc_map_canonical_100 () =
-    CE.encode CE.canonical mapIntEncoder100
+    CE.encode (CE.map CE.canonicalSort Definite mapIntEntries100)
 
 
 enc_map_unsorted_1000 : () -> Bytes
 enc_map_unsorted_1000 () =
-    CE.encode CE.unsorted mapIntEncoder1000
+    CE.encode (CE.map CE.Unsorted Definite mapIntEntries1000)
 
 
 enc_map_deterministic_1000 : () -> Bytes
 enc_map_deterministic_1000 () =
-    CE.encode CE.deterministic mapIntEncoder1000
+    CE.encode (CE.map CE.deterministicSort Definite mapIntEntries1000)
 
 
 enc_map_canonical_1000 : () -> Bytes
 enc_map_canonical_1000 () =
-    CE.encode CE.canonical mapIntEncoder1000
+    CE.encode (CE.map CE.canonicalSort Definite mapIntEntries1000)
 
 
 enc_map_unsorted_str100 : () -> Bytes
 enc_map_unsorted_str100 () =
-    CE.encode CE.unsorted mapStrEncoder100
+    CE.encode (CE.map CE.Unsorted Definite mapStrEntries100)
 
 
 enc_map_deterministic_str100 : () -> Bytes
 enc_map_deterministic_str100 () =
-    CE.encode CE.deterministic mapStrEncoder100
+    CE.encode (CE.map CE.deterministicSort Definite mapStrEntries100)
 
 
 enc_map_canonical_str100 : () -> Bytes
 enc_map_canonical_str100 () =
-    CE.encode CE.canonical mapStrEncoder100
+    CE.encode (CE.map CE.canonicalSort Definite mapStrEntries100)
 
 
 
@@ -611,43 +607,43 @@ dec_item_array100 () =
 
 enc_direct_list100 : () -> Bytes
 enc_direct_list100 () =
-    CE.encode CE.unsorted listEncoder100
+    CE.encode listEncoder100
 
 
 enc_item_list100 : () -> Bytes
 enc_item_list100 () =
-    CE.encode CE.unsorted listItemEncoder100
+    CE.encode listItemEncoder100
 
 
 
 -- ============================================================================
 -- 3. FLOAT SHORTEST-FORM DETECTION
 -- ============================================================================
--- The encoder tries float16, then float32, then float64 (up to 3 roundtrips).
--- f16: best case (1 roundtrip check succeeds)
--- f32: middle case (f16 fails, f32 succeeds = 2 checks)
--- f64: worst case (f16 and f32 both fail = 3 checks)
+-- The encoder tries float32 first, then float16 within range (up to 2 roundtrips).
+-- f16: float32 succeeds + float16 succeeds (2 roundtrip checks)
+-- f32: float32 succeeds + float16 fails (2 roundtrip checks)
+-- f64: float32 fails (1 roundtrip check)
 -- explicit64: skip detection entirely (0 checks, baseline)
 
 
 enc_float_f16_1000 : () -> Bytes
 enc_float_f16_1000 () =
-    CE.encode CE.unsorted (CE.list CE.float float16Values)
+    CE.encode (CE.list Definite CE.float float16Values)
 
 
 enc_float_f32_1000 : () -> Bytes
 enc_float_f32_1000 () =
-    CE.encode CE.unsorted (CE.list CE.float float32Values)
+    CE.encode (CE.list Definite CE.float float32Values)
 
 
 enc_float_f64_1000 : () -> Bytes
 enc_float_f64_1000 () =
-    CE.encode CE.unsorted (CE.list CE.float float64Values)
+    CE.encode (CE.list Definite CE.float float64Values)
 
 
 enc_float_explicit64_1000 : () -> Bytes
 enc_float_explicit64_1000 () =
-    CE.encode CE.unsorted (CE.list (\f -> CE.floatWithWidth FW64 f) float64Values)
+    CE.encode (CE.list Definite (\f -> CE.floatWithWidth FW64 f) float64Values)
 
 
 
