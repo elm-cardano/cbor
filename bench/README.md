@@ -535,3 +535,85 @@ from loops, keeping the fast `Decode.loop` path).
 5% slower with `CountedBuilder` (`optionalElement`). 4% slower for keyed records.
 
 **Definite-length**: Unchanged.
+
+
+### Encoder API exploration: argument-based vs phantom types
+
+We explored three alternative encoder APIs to compare ergonomics and
+performance against `elm-toulouse/cbor` (`tl`):
+
+| Approach | Module | Idea |
+|----------|--------|------|
+| **Phantom flat** (`ph`) | `PhantomEncode` | Phantom extensible records track pending decisions. Containers require resolved (`Encoder {}`) children. Resolution via pipeline: `\|> PE.unsorted \|> PE.definite`. |
+| **Phantom tree** (`pt`) | `PhantomTreeEncode` | Same phantom types, but containers accept unresolved children. A single `\|> PT.definite` walks the subtree resolving all pending decisions. |
+| **Argument-based** (`ar`) | `ArgEncode` | No phantom types. `Length` and `Sort comparable` passed directly as arguments: `AE.array AE.Definite [...]`, `AE.map AE.Unsorted AE.Definite [...]`. |
+
+#### API comparison
+
+```elm
+-- Phantom flat (ph): pipeline resolution, children must be Encoder {}
+PE.map [ ( PE.int 0, PE.array [ PE.int 1 ] |> PE.definite ) ]
+    |> PE.unsorted
+    |> PE.definite
+
+-- Phantom tree (pt): deferred resolution, one call resolves the subtree
+PT.map [ ( PT.int 0, PT.array [ PT.int 1 ] ) ]
+    |> PT.unsorted
+    |> PT.definite
+
+-- Argument-based (ar): decisions at construction, no resolution step
+AE.map AE.Unsorted AE.Definite [ ( AE.int 0, AE.array AE.Definite [ AE.int 1 ] ) ]
+```
+
+#### Results: all approaches vs toulouse
+
+| Benchmark | tl (ns) | ph (ns) | pt (ns) | ar (ns) |
+|-----------|--------:|--------:|--------:|--------:|
+| list100 | 6132 | 4548 (26% faster) | 6135 (same) | 4410 (28% faster) |
+| map100 | 16571 | 11391 (31% faster) | 12114 (27% faster) | 8820 (47% faster) |
+| tuple10 | 593 | 523 (12% faster) | 695 (17% slower) | 515 (13% faster) |
+| keyed10 | 970 | 979 (1% slower) | 1047 (8% slower) | 761 (22% faster) |
+| nested100 | 31631 | 21148 (33% faster) | 32239 (2% slower) | 20385 (36% faster) |
+| list100_mixed | 15861 | 13626 (14% faster) | 20220 (27% slower) | 12994 (18% faster) |
+| map100_mixed | 25625 | 20525 (20% faster) | 30248 (18% slower) | 17156 (33% faster) |
+
+#### Results: argument-based vs phantom flat (head-to-head)
+
+| Benchmark | ar vs ph |
+|-----------|----------|
+| list100 | 3% faster |
+| map100 | **17% faster** |
+| tuple10 | 2% faster |
+| keyed10 | **20% faster** |
+| nested100 | 4% faster |
+| list100_mixed | 2% faster |
+| map100_mixed | **14% faster** |
+
+#### Analysis
+
+**Argument-based wins on all counts.** It is the fastest approach across
+every benchmark, the simplest implementation (single `Encoder` constructor,
+no phantom types, no `coerce`, no multi-step state machine), and arguably
+the best ergonomics (one function call per container, decisions are explicit).
+
+The map benchmarks show the largest `ar` vs `ph` gains (14-20%) because
+`PhantomEncode` routes maps through multiple intermediate constructors
+(`MapNeedsBoth` → `MapNeedsLength` → `Resolved`) while `ArgEncode` builds
+the `BE.Encoder` directly in a single `map` call.
+
+The phantom tree approach suffers from tree-walk overhead during resolution.
+An `allLeaf` early-exit optimization brought it to parity with toulouse on
+homogeneous collections, but it remains slower on mixed/nested structures.
+Pre-resolving inner containers (matching the flat phantom pattern) recovers
+performance, but at that point the phantom machinery adds no value.
+
+**Key insight**: users can surface the `Sort` and `Length` parameters in
+their own encoder functions for flexibility:
+
+```elm
+encodeMyRecord : AE.Length -> MyRecord -> AE.Encoder
+encodeMyRecord len r =
+    AE.array len [ AE.int r.x, AE.string r.name ]
+```
+
+This provides the same composability as phantom types without the complexity.

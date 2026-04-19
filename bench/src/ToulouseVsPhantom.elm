@@ -1,15 +1,16 @@
 module ToulouseVsPhantom exposing
-    ( enc_tl_list100, enc_ph_list100, enc_pt_list100
-    , enc_tl_map100, enc_ph_map100, enc_pt_map100
-    , enc_tl_tuple10, enc_ph_tuple10, enc_pt_tuple10
-    , enc_tl_keyed10, enc_ph_keyed10, enc_pt_keyed10
-    , enc_tl_nested100, enc_ph_nested100, enc_pt_nested100
-    , enc_tl_list100_mixed, enc_ph_list100_mixed, enc_pt_list100_mixed
-    , enc_tl_map100_mixed, enc_ph_map100_mixed, enc_pt_map100_mixed
+    ( enc_tl_list100, enc_ph_list100, enc_pt_list100, enc_ar_list100
+    , enc_tl_map100, enc_ph_map100, enc_pt_map100, enc_ar_map100
+    , enc_tl_tuple10, enc_ph_tuple10, enc_pt_tuple10, enc_ar_tuple10
+    , enc_tl_keyed10, enc_ph_keyed10, enc_pt_keyed10, enc_ar_keyed10
+    , enc_tl_nested100, enc_ph_nested100, enc_pt_nested100, enc_ar_nested100
+    , enc_tl_list100_mixed, enc_ph_list100_mixed, enc_pt_list100_mixed, enc_ar_list100_mixed
+    , enc_tl_map100_mixed, enc_ph_map100_mixed, enc_pt_map100_mixed, enc_ar_map100_mixed
     )
 
 {-| Head-to-head benchmarks: elm-toulouse/cbor (`tl`) vs
-PhantomEncode (`ph`, flat) vs PhantomTreeEncode (`pt`, tree).
+PhantomEncode (`ph`, flat) vs PhantomTreeEncode (`pt`, tree)
+vs ArgEncode (`ar`, argument-based).
 
 Uses [elm-bench](https://github.com/elm-menagerie/elm-bench).
 
@@ -17,19 +18,19 @@ Uses [elm-bench](https://github.com/elm-menagerie/elm-bench).
 # Encode array of 100 ints
 
 ```sh
-elm-bench -f ToulouseVsPhantom.enc_tl_list100 -f ToulouseVsPhantom.enc_ph_list100 -f ToulouseVsPhantom.enc_pt_list100 "()"
+elm-bench -f ToulouseVsPhantom.enc_tl_list100 -f ToulouseVsPhantom.enc_ph_list100 -f ToulouseVsPhantom.enc_pt_list100 -f ToulouseVsPhantom.enc_ar_list100 "()"
 ```
 
-@docs enc_tl_list100, enc_ph_list100, enc_pt_list100
+@docs enc_tl_list100, enc_ph_list100, enc_pt_list100, enc_ar_list100
 
 
 # Encode map of 100 int→int pairs
 
 ```sh
-elm-bench -f ToulouseVsPhantom.enc_tl_map100 -f ToulouseVsPhantom.enc_ph_map100 -f ToulouseVsPhantom.enc_pt_map100 "()"
+elm-bench -f ToulouseVsPhantom.enc_tl_map100 -f ToulouseVsPhantom.enc_ph_map100 -f ToulouseVsPhantom.enc_pt_map100 -f ToulouseVsPhantom.enc_ar_map100 "()"
 ```
 
-@docs enc_tl_map100, enc_ph_map100, enc_pt_map100
+@docs enc_tl_map100, enc_ph_map100, enc_pt_map100, enc_ar_map100
 
 
 # Encode 10-field record as CBOR array (tuple)
@@ -37,10 +38,10 @@ elm-bench -f ToulouseVsPhantom.enc_tl_map100 -f ToulouseVsPhantom.enc_ph_map100 
 Includes both encoder construction and serialization.
 
 ```sh
-elm-bench -f ToulouseVsPhantom.enc_tl_tuple10 -f ToulouseVsPhantom.enc_ph_tuple10 -f ToulouseVsPhantom.enc_pt_tuple10 "()"
+elm-bench -f ToulouseVsPhantom.enc_tl_tuple10 -f ToulouseVsPhantom.enc_ph_tuple10 -f ToulouseVsPhantom.enc_pt_tuple10 -f ToulouseVsPhantom.enc_ar_tuple10 "()"
 ```
 
-@docs enc_tl_tuple10, enc_ph_tuple10, enc_pt_tuple10
+@docs enc_tl_tuple10, enc_ph_tuple10, enc_pt_tuple10, enc_ar_tuple10
 
 
 # Encode 10-field keyed record as CBOR map
@@ -48,19 +49,19 @@ elm-bench -f ToulouseVsPhantom.enc_tl_tuple10 -f ToulouseVsPhantom.enc_ph_tuple1
 Includes both encoder construction and serialization.
 
 ```sh
-elm-bench -f ToulouseVsPhantom.enc_tl_keyed10 -f ToulouseVsPhantom.enc_ph_keyed10 -f ToulouseVsPhantom.enc_pt_keyed10 "()"
+elm-bench -f ToulouseVsPhantom.enc_tl_keyed10 -f ToulouseVsPhantom.enc_ph_keyed10 -f ToulouseVsPhantom.enc_pt_keyed10 -f ToulouseVsPhantom.enc_ar_keyed10 "()"
 ```
 
-@docs enc_tl_keyed10, enc_ph_keyed10, enc_pt_keyed10
+@docs enc_tl_keyed10, enc_ph_keyed10, enc_pt_keyed10, enc_ar_keyed10
 
 
 # Encode 100 nested records (list of 3-field tuples)
 
 ```sh
-elm-bench -f ToulouseVsPhantom.enc_tl_nested100 -f ToulouseVsPhantom.enc_ph_nested100 -f ToulouseVsPhantom.enc_pt_nested100 "()"
+elm-bench -f ToulouseVsPhantom.enc_tl_nested100 -f ToulouseVsPhantom.enc_ph_nested100 -f ToulouseVsPhantom.enc_pt_nested100 -f ToulouseVsPhantom.enc_ar_nested100 "()"
 ```
 
-@docs enc_tl_nested100, enc_ph_nested100, enc_pt_nested100
+@docs enc_tl_nested100, enc_ph_nested100, enc_pt_nested100, enc_ar_nested100
 
 
 # Encode list of 100 wrapped ints (non-Direct path)
@@ -68,10 +69,10 @@ elm-bench -f ToulouseVsPhantom.enc_tl_nested100 -f ToulouseVsPhantom.enc_ph_nest
 Each element is a 1-element CBOR array wrapping an int.
 
 ```sh
-elm-bench -f ToulouseVsPhantom.enc_tl_list100_mixed -f ToulouseVsPhantom.enc_ph_list100_mixed -f ToulouseVsPhantom.enc_pt_list100_mixed "()"
+elm-bench -f ToulouseVsPhantom.enc_tl_list100_mixed -f ToulouseVsPhantom.enc_ph_list100_mixed -f ToulouseVsPhantom.enc_pt_list100_mixed -f ToulouseVsPhantom.enc_ar_list100_mixed "()"
 ```
 
-@docs enc_tl_list100_mixed, enc_ph_list100_mixed, enc_pt_list100_mixed
+@docs enc_tl_list100_mixed, enc_ph_list100_mixed, enc_pt_list100_mixed, enc_ar_list100_mixed
 
 
 # Encode map of 100 wrapped int pairs (non-Direct path)
@@ -79,13 +80,14 @@ elm-bench -f ToulouseVsPhantom.enc_tl_list100_mixed -f ToulouseVsPhantom.enc_ph_
 Each value is a 1-element CBOR array wrapping an int.
 
 ```sh
-elm-bench -f ToulouseVsPhantom.enc_tl_map100_mixed -f ToulouseVsPhantom.enc_ph_map100_mixed -f ToulouseVsPhantom.enc_pt_map100_mixed "()"
+elm-bench -f ToulouseVsPhantom.enc_tl_map100_mixed -f ToulouseVsPhantom.enc_ph_map100_mixed -f ToulouseVsPhantom.enc_pt_map100_mixed -f ToulouseVsPhantom.enc_ar_map100_mixed "()"
 ```
 
-@docs enc_tl_map100_mixed, enc_ph_map100_mixed, enc_pt_map100_mixed
+@docs enc_tl_map100_mixed, enc_ph_map100_mixed, enc_pt_map100_mixed, enc_ar_map100_mixed
 
 -}
 
+import ArgEncode as AE
 import Bytes exposing (Bytes)
 import PhantomEncode as PE
 import PhantomTreeEncode as PT
@@ -175,6 +177,11 @@ ptListEncoder ints =
         |> PT.definite
 
 
+arListEncoder : List Int -> AE.Encoder
+arListEncoder ints =
+    AE.list AE.Definite AE.int ints
+
+
 tlMapEncoder : List ( Int, Int ) -> TE.Encoder
 tlMapEncoder =
     TE.associativeList TE.int TE.int
@@ -194,6 +201,11 @@ ptMapEncoder pairs =
         |> PT.definite
 
 
+arMapEncoder : List ( Int, Int ) -> AE.Encoder
+arMapEncoder pairs =
+    AE.map AE.Unsorted AE.Definite (List.map (\( k, v ) -> ( AE.int k, AE.int v )) pairs)
+
+
 tlListMixedEncoder : List (List Int) -> TE.Encoder
 tlListMixedEncoder =
     TE.list (TE.list TE.int)
@@ -209,6 +221,11 @@ ptListMixedEncoder : List (List Int) -> PT.Encoder {}
 ptListMixedEncoder items =
     PT.list (PT.list PT.int) items
         |> PT.definite
+
+
+arListMixedEncoder : List (List Int) -> AE.Encoder
+arListMixedEncoder items =
+    AE.list AE.Definite (\vs -> AE.list AE.Definite AE.int vs) items
 
 
 tlMapMixedEncoder : List ( Int, List Int ) -> TE.Encoder
@@ -228,6 +245,11 @@ ptMapMixedEncoder pairs =
     PT.map (List.map (\( k, vs ) -> ( PT.int k, PT.list PT.int vs )) pairs)
         |> PT.unsorted
         |> PT.definite
+
+
+arMapMixedEncoder : List ( Int, List Int ) -> AE.Encoder
+arMapMixedEncoder pairs =
+    AE.map AE.Unsorted AE.Definite (List.map (\( k, vs ) -> ( AE.int k, AE.list AE.Definite AE.int vs )) pairs)
 
 
 
@@ -251,6 +273,11 @@ enc_pt_list100 () =
     PT.encode (ptListEncoder intRange100)
 
 
+enc_ar_list100 : () -> Bytes
+enc_ar_list100 () =
+    AE.encode (arListEncoder intRange100)
+
+
 -- ============================================================================
 -- 2. ENCODE MAP OF 100 INT PAIRS (pre-built)
 -- ============================================================================
@@ -269,6 +296,11 @@ enc_ph_map100 () =
 enc_pt_map100 : () -> Bytes
 enc_pt_map100 () =
     PT.encode (ptMapEncoder intPairs100)
+
+
+enc_ar_map100 : () -> Bytes
+enc_ar_map100 () =
+    AE.encode (arMapEncoder intPairs100)
 
 
 
@@ -341,6 +373,27 @@ enc_ph_tuple10 () =
 enc_pt_tuple10 : () -> Bytes
 enc_pt_tuple10 () =
     PT.encode (ptTuple10Encoder r10)
+
+
+enc_ar_tuple10 : () -> Bytes
+enc_ar_tuple10 () =
+    AE.encode (arTuple10Encoder r10)
+
+
+arTuple10Encoder : R10 -> AE.Encoder
+arTuple10Encoder r =
+    AE.array AE.Definite
+        [ AE.int r.a
+        , AE.int r.b
+        , AE.int r.c
+        , AE.int r.d
+        , AE.int r.e
+        , AE.int r.f
+        , AE.int r.g
+        , AE.int r.h
+        , AE.int r.i
+        , AE.int r.j
+        ]
 
 
 
@@ -416,6 +469,27 @@ enc_pt_keyed10 () =
     PT.encode (ptKeyed10Encoder r10)
 
 
+enc_ar_keyed10 : () -> Bytes
+enc_ar_keyed10 () =
+    AE.encode (arKeyed10Encoder r10)
+
+
+arKeyed10Encoder : R10 -> AE.Encoder
+arKeyed10Encoder r =
+    AE.map AE.Unsorted AE.Definite
+        [ ( AE.int 0, AE.int r.a )
+        , ( AE.int 1, AE.int r.b )
+        , ( AE.int 2, AE.int r.c )
+        , ( AE.int 3, AE.int r.d )
+        , ( AE.int 4, AE.int r.e )
+        , ( AE.int 5, AE.int r.f )
+        , ( AE.int 6, AE.int r.g )
+        , ( AE.int 7, AE.int r.h )
+        , ( AE.int 8, AE.int r.i )
+        , ( AE.int 9, AE.int r.j )
+        ]
+
+
 
 -- ============================================================================
 -- 5. ENCODE 100 NESTED RECORDS (LIST OF 3-FIELD TUPLES)
@@ -459,6 +533,16 @@ enc_pt_nested100 () =
     PT.encode (ptNested100Encoder r3List)
 
 
+enc_ar_nested100 : () -> Bytes
+enc_ar_nested100 () =
+    AE.encode (arNested100Encoder r3List)
+
+
+arNested100Encoder : List R3 -> AE.Encoder
+arNested100Encoder rs =
+    AE.list AE.Definite (\r -> AE.array AE.Definite [ AE.int r.a, AE.int r.b, AE.int r.c ]) rs
+
+
 
 -- ============================================================================
 -- 6. ENCODE LIST OF 100 WRAPPED INTS (NON-DIRECT PATH)
@@ -480,6 +564,11 @@ enc_pt_list100_mixed () =
     PT.encode (ptListMixedEncoder intRange100Mixed)
 
 
+enc_ar_list100_mixed : () -> Bytes
+enc_ar_list100_mixed () =
+    AE.encode (arListMixedEncoder intRange100Mixed)
+
+
 -- ============================================================================
 -- 7. ENCODE MAP OF 100 WRAPPED INT PAIRS (NON-DIRECT PATH)
 -- ============================================================================
@@ -498,3 +587,8 @@ enc_ph_map100_mixed () =
 enc_pt_map100_mixed : () -> Bytes
 enc_pt_map100_mixed () =
     PT.encode (ptMapMixedEncoder intPairs100Mixed)
+
+
+enc_ar_map100_mixed : () -> Bytes
+enc_ar_map100_mixed () =
+    AE.encode (arMapMixedEncoder intPairs100Mixed)
