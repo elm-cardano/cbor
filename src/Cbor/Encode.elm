@@ -664,17 +664,18 @@ encodeHeaderWithWidth width majorType argument =
 
 encodeFloat : Float -> BE.Encoder
 encodeFloat f =
-    if (isNaN f || isInfinite f || abs f <= 65504) && float16RoundTrips f then
-        BE.sequence
-            [ BE.unsignedInt8 0xF9
-            , Bytes.Floating.Encode.float16 Bytes.BE f
-            ]
+    if float32RoundTrips f then
+        if (isNaN f || isInfinite f || abs f <= 65504) && float16RoundTrips f then
+            BE.sequence
+                [ BE.unsignedInt8 0xF9
+                , Bytes.Floating.Encode.float16 Bytes.BE f
+                ]
 
-    else if float32RoundTrips f then
-        BE.sequence
-            [ BE.unsignedInt8 0xFA
-            , BE.float32 Bytes.BE f
-            ]
+        else
+            BE.sequence
+                [ BE.unsignedInt8 0xFA
+                , BE.float32 Bytes.BE f
+                ]
 
     else
         BE.sequence
@@ -807,39 +808,48 @@ encodeItem cborItem =
                 ]
 
         CborArray length items ->
+            let
+                { count, inner } =
+                    List.foldr
+                        (\ci acc ->
+                            { count = acc.count + 1
+                            , inner = encodeItem ci :: acc.inner
+                            }
+                        )
+                        { count = 0, inner = [] }
+                        items
+            in
             case length of
                 Definite ->
-                    BE.sequence (encodeHeader 4 (List.length items) :: List.map encodeItem items)
+                    BE.sequence (encodeHeader 4 count :: inner)
 
                 Indefinite ->
                     BE.sequence
                         [ BE.unsignedInt8 0x9F
-                        , BE.sequence (List.map encodeItem items)
+                        , BE.sequence inner
                         , BE.unsignedInt8 0xFF
                         ]
 
         CborMap length entries ->
             let
-                entryEncoders : List BE.Encoder
-                entryEncoders =
+                { count, flatEntries } =
                     List.foldr
                         (\e acc ->
-                            encodeItem e.key :: encodeItem e.value :: acc
+                            { count = acc.count + 1
+                            , flatEntries = encodeItem e.key :: encodeItem e.value :: acc.flatEntries
+                            }
                         )
-                        []
+                        { count = 0, flatEntries = [] }
                         entries
             in
             case length of
                 Definite ->
-                    BE.sequence
-                        (encodeHeader 5 (List.length entries)
-                            :: entryEncoders
-                        )
+                    BE.sequence (encodeHeader 5 count :: flatEntries)
 
                 Indefinite ->
                     BE.sequence
                         [ BE.unsignedInt8 0xBF
-                        , BE.sequence entryEncoders
+                        , BE.sequence flatEntries
                         , BE.unsignedInt8 0xFF
                         ]
 
