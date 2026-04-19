@@ -227,31 +227,50 @@ resolveSort decision node =
             SeqNode (List.map (resolveSort decision) children)
 
         ArrayNode maybeLen children ->
-            let
-                resolved =
-                    List.map (resolveSort decision) children
-            in
-            case maybeLen of
-                Just l ->
-                    collapseArray l resolved
+            if allLeaf children then
+                case maybeLen of
+                    Just l ->
+                        Leaf (buildArray l (List.length children) (List.map nodeToBytes children))
 
-                Nothing ->
-                    ArrayNode Nothing resolved
+                    Nothing ->
+                        node
+
+            else
+                let
+                    resolved =
+                        List.map (resolveSort decision) children
+                in
+                case maybeLen of
+                    Just l ->
+                        collapseArray l resolved
+
+                    Nothing ->
+                        ArrayNode Nothing resolved
 
         MapNode maybeSort maybeLen entries ->
             let
                 s =
                     Maybe.withDefault decision maybeSort
-
-                resolved =
-                    mapPairs (resolveSort decision) entries
             in
-            case maybeLen of
-                Just l ->
-                    collapseMap s l resolved
+            if allLeafPairs entries then
+                case maybeLen of
+                    Just l ->
+                        Leaf (buildMap s l entries)
 
-                Nothing ->
-                    MapNode (Just s) Nothing resolved
+                    Nothing ->
+                        MapNode (Just s) Nothing entries
+
+            else
+                let
+                    resolved =
+                        mapPairs (resolveSort decision) entries
+                in
+                case maybeLen of
+                    Just l ->
+                        collapseMap s l resolved
+
+                    Nothing ->
+                        MapNode (Just s) Nothing resolved
 
 
 resolveLength : Length -> Node -> Node
@@ -264,24 +283,40 @@ resolveLength len node =
             SeqNode (List.map (resolveLength len) children)
 
         ArrayNode maybeLen children ->
-            collapseArray
-                (Maybe.withDefault len maybeLen)
-                (List.map (resolveLength len) children)
+            let
+                l =
+                    Maybe.withDefault len maybeLen
+            in
+            if allLeaf children then
+                Leaf (buildArray l (List.length children) (List.map nodeToBytes children))
+
+            else
+                collapseArray l (List.map (resolveLength len) children)
 
         MapNode maybeSort maybeLen entries ->
             let
                 l =
                     Maybe.withDefault len maybeLen
-
-                resolved =
-                    mapPairs (resolveLength len) entries
             in
-            case maybeSort of
-                Just s ->
-                    collapseMap s l resolved
+            if allLeafPairs entries then
+                case maybeSort of
+                    Just s ->
+                        Leaf (buildMap s l entries)
 
-                Nothing ->
-                    MapNode Nothing (Just l) resolved
+                    Nothing ->
+                        MapNode Nothing (Just l) entries
+
+            else
+                let
+                    resolved =
+                        mapPairs (resolveLength len) entries
+                in
+                case maybeSort of
+                    Just s ->
+                        collapseMap s l resolved
+
+                    Nothing ->
+                        MapNode Nothing (Just l) resolved
 
 
 mapPairs : (Node -> Node) -> List ( Node, Node ) -> List ( Node, Node )
