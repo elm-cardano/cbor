@@ -166,7 +166,44 @@ Symmetric trade-off (~50% each way). **V1 kept** — small integers
 (float16-representable) are common in Cardano CBOR data.
 
 
-### Encoder optimizations
+### Encoder: `Direct` fast path for strategy-independent encoders
+
+**Result**: list100 pre-built encoding went from 3146 ns to 1428 ns (tl gap
+narrowed from 59% to ~13%).
+
+elm-cardano's `Encoder` is a closure `Encoder (Strategy -> BE.Encoder)` to
+support configurable strategies (key sorting, length mode). Primitives like
+`int` and `bool` ignore the strategy, but still pay for closure dispatch at
+`encode` time. A second constructor `Direct BE.Encoder` eliminates this:
+
+```elm
+type Encoder
+    = Encoder (Strategy -> BE.Encoder)
+    | Direct BE.Encoder
+```
+
+All primitives (`int`, `float`, `bool`, `null`, `string`, `bytes`, etc.) use
+`Direct`, building the `BE.Encoder` tree eagerly at construction time.
+
+**Key insight**: `Direct` on primitives alone gains nothing — containers like
+`array` and `sequence` still create `Encoder` closures that dispatch per child
+at encode time, replacing closure calls with pattern matches (net zero).
+The fix is propagating `Direct` upward through containers:
+
+- `sequence`: if `allDirect`, returns `Direct (BE.sequence ...)` — no closure.
+- `tag`: if enclosed is `Direct`, returns `Direct`.
+- `array`: if `allDirect`, pre-collects `BE.Encoder` list at construction time.
+  Still `Encoder` (needs `lengthMode`), but the closure captures the pre-built
+  list — no per-item dispatch at encode time.
+
+`allDirect` is a short-circuiting traversal with no allocation. `list` does not
+probe the first element because `a -> Encoder` could vary per value; it
+delegates to `array` which checks every element.
+
+Backward-compatible: constructors are opaque.
+
+
+### Encoder micro-optimizations
 
 Five micro-optimizations applied to `Cbor.Encode` internals.
 

@@ -74,6 +74,7 @@ import Hex
 -}
 type Encoder
     = Encoder (Strategy -> BE.Encoder)
+    | Direct BE.Encoder
 
 
 {-| Controls key ordering and length mode for collections.
@@ -148,8 +149,42 @@ unsorted =
 {-| Apply a strategy to an encoder and produce CBOR bytes.
 -}
 encode : Strategy -> Encoder -> Bytes.Bytes
-encode strategy (Encoder enc) =
-    BE.encode (enc strategy)
+encode strategy encoder =
+    BE.encode (applyStrategy strategy encoder)
+
+
+applyStrategy : Strategy -> Encoder -> BE.Encoder
+applyStrategy strategy encoder =
+    case encoder of
+        Encoder enc ->
+            enc strategy
+
+        Direct be ->
+            be
+
+
+allDirect : List Encoder -> Bool
+allDirect encoders =
+    case encoders of
+        [] ->
+            True
+
+        (Direct _) :: rest ->
+            allDirect rest
+
+        (Encoder _) :: _ ->
+            False
+
+
+unwrapDirect : Encoder -> BE.Encoder
+unwrapDirect encoder =
+    case encoder of
+        Direct be ->
+            be
+
+        Encoder _ ->
+            -- unreachable when guarded by allDirect
+            BE.sequence []
 
 
 
@@ -163,59 +198,55 @@ Handles both positive and negative values within Elm's safe integer range.
 -}
 int : Int -> Encoder
 int n =
-    Encoder (\_ -> encodeInt n)
+    Direct (encodeInt n)
 
 
 {-| Encode a float using the shortest IEEE 754 form that preserves the value.
 -}
 float : Float -> Encoder
 float f =
-    Encoder (\_ -> encodeFloat f)
+    Direct (encodeFloat f)
 
 
 {-| Encode a boolean.
 -}
 bool : Bool -> Encoder
 bool b =
-    Encoder
-        (\_ ->
-            if b then
-                BE.unsignedInt8 0xF5
+    if b then
+        Direct (BE.unsignedInt8 0xF5)
 
-            else
-                BE.unsignedInt8 0xF4
-        )
+    else
+        Direct (BE.unsignedInt8 0xF4)
 
 
 {-| Encode a CBOR null.
 -}
 null : Encoder
 null =
-    Encoder (\_ -> BE.unsignedInt8 0xF6)
+    Direct (BE.unsignedInt8 0xF6)
 
 
 {-| Encode a CBOR undefined.
 -}
 undefined : Encoder
 undefined =
-    Encoder (\_ -> BE.unsignedInt8 0xF7)
+    Direct (BE.unsignedInt8 0xF7)
 
 
 {-| Encode a UTF-8 text string (major type 3).
 -}
 string : String -> Encoder
 string s =
-    Encoder
-        (\_ ->
-            let
-                len : Int
-                len =
-                    BE.getStringWidth s
-            in
-            BE.sequence
-                [ encodeHeader 3 len
-                , BE.string s
-                ]
+    let
+        len : Int
+        len =
+            BE.getStringWidth s
+    in
+    Direct
+        (BE.sequence
+            [ encodeHeader 3 len
+            , BE.string s
+            ]
         )
 
 
@@ -223,12 +254,11 @@ string s =
 -}
 bytes : Bytes.Bytes -> Encoder
 bytes bs =
-    Encoder
-        (\_ ->
-            BE.sequence
-                [ encodeHeader 2 (Bytes.width bs)
-                , BE.bytes bs
-                ]
+    Direct
+        (BE.sequence
+            [ encodeHeader 2 (Bytes.width bs)
+            , BE.bytes bs
+            ]
         )
 
 
@@ -236,17 +266,16 @@ bytes bs =
 -}
 simple : Int -> Encoder
 simple n =
-    Encoder
-        (\_ ->
-            if n < 24 then
-                BE.unsignedInt8 (0xE0 + n)
+    if n < 24 then
+        Direct (BE.unsignedInt8 (0xE0 + n))
 
-            else
-                BE.sequence
-                    [ BE.unsignedInt8 0xF8
-                    , BE.unsignedInt8 n
-                    ]
-        )
+    else
+        Direct
+            (BE.sequence
+                [ BE.unsignedInt8 0xF8
+                , BE.unsignedInt8 n
+                ]
+            )
 
 
 
@@ -261,33 +290,32 @@ encoding exists. Useful for lossless round-tripping.
 -}
 intWithWidth : IntWidth -> Int -> Encoder
 intWithWidth width n =
-    Encoder (\_ -> encodeIntWithWidth width n)
+    Direct (encodeIntWithWidth width n)
 
 
 {-| Encode a float with a specific IEEE 754 width. Ignores strategy.
 -}
 floatWithWidth : FloatWidth -> Float -> Encoder
 floatWithWidth width f =
-    Encoder
-        (\_ ->
-            case width of
-                FW16 ->
-                    BE.sequence
-                        [ BE.unsignedInt8 0xF9
-                        , Bytes.Floating.Encode.float16 Bytes.BE f
-                        ]
+    Direct
+        (case width of
+            FW16 ->
+                BE.sequence
+                    [ BE.unsignedInt8 0xF9
+                    , Bytes.Floating.Encode.float16 Bytes.BE f
+                    ]
 
-                FW32 ->
-                    BE.sequence
-                        [ BE.unsignedInt8 0xFA
-                        , BE.float32 Bytes.BE f
-                        ]
+            FW32 ->
+                BE.sequence
+                    [ BE.unsignedInt8 0xFA
+                    , BE.float32 Bytes.BE f
+                    ]
 
-                FW64 ->
-                    BE.sequence
-                        [ BE.unsignedInt8 0xFB
-                        , BE.float64 Bytes.BE f
-                        ]
+            FW64 ->
+                BE.sequence
+                    [ BE.unsignedInt8 0xFB
+                    , BE.float64 Bytes.BE f
+                    ]
         )
 
 
@@ -299,13 +327,12 @@ floatWithWidth width f =
 -}
 stringChunked : List String -> Encoder
 stringChunked chunks =
-    Encoder
-        (\_ ->
-            BE.sequence
-                [ BE.unsignedInt8 0x7F
-                , BE.sequence (List.map encodeStringChunk chunks)
-                , BE.unsignedInt8 0xFF
-                ]
+    Direct
+        (BE.sequence
+            [ BE.unsignedInt8 0x7F
+            , BE.sequence (List.map encodeStringChunk chunks)
+            , BE.unsignedInt8 0xFF
+            ]
         )
 
 
@@ -326,13 +353,12 @@ encodeStringChunk s =
 -}
 bytesChunked : List Bytes.Bytes -> Encoder
 bytesChunked chunks =
-    Encoder
-        (\_ ->
-            BE.sequence
-                [ BE.unsignedInt8 0x5F
-                , BE.sequence (List.map encodeByteChunk chunks)
-                , BE.unsignedInt8 0xFF
-                ]
+    Direct
+        (BE.sequence
+            [ BE.unsignedInt8 0x5F
+            , BE.sequence (List.map encodeByteChunk chunks)
+            , BE.unsignedInt8 0xFF
+            ]
         )
 
 
@@ -355,24 +381,25 @@ The strategy determines whether definite or indefinite length encoding is used.
 -}
 array : List Encoder -> Encoder
 array items =
-    Encoder
-        (\strategy ->
-            let
-                encodedItems : List BE.Encoder
-                encodedItems =
-                    List.map (\(Encoder enc) -> enc strategy) items
-            in
+    let
+        arraySequence : List BE.Encoder -> Strategy -> BE.Encoder
+        arraySequence itemsEncoders strategy =
             case strategy.lengthMode of
                 Definite ->
-                    BE.sequence (encodeHeader 4 (List.length items) :: encodedItems)
+                    BE.sequence (encodeHeader 4 (List.length items) :: itemsEncoders)
 
                 Indefinite ->
                     BE.sequence
                         [ BE.unsignedInt8 0x9F
-                        , BE.sequence encodedItems
+                        , BE.sequence itemsEncoders
                         , BE.unsignedInt8 0xFF
                         ]
-        )
+    in
+    if allDirect items then
+        Encoder (arraySequence (List.map unwrapDirect items))
+
+    else
+        Encoder (\strategy -> arraySequence (List.map (applyStrategy strategy) items) strategy)
 
 
 {-| Encode a CBOR map (major type 5).
@@ -388,17 +415,17 @@ map entries =
                 encodedEntries : List ( Bytes.Bytes, BE.Encoder )
                 encodedEntries =
                     List.map
-                        (\( Encoder keyEnc, Encoder valEnc ) ->
+                        (\( keyEnc, valEnc ) ->
                             let
                                 keyBytes : Bytes.Bytes
                                 keyBytes =
-                                    BE.encode (keyEnc strategy)
+                                    BE.encode (applyStrategy strategy keyEnc)
 
                                 entryEncoder : BE.Encoder
                                 entryEncoder =
                                     BE.sequence
                                         [ BE.bytes keyBytes
-                                        , valEnc strategy
+                                        , applyStrategy strategy valEnc
                                         ]
                             in
                             ( keyBytes, entryEncoder )
@@ -429,14 +456,24 @@ map entries =
 {-| Encode a CBOR semantic tag (major type 6).
 -}
 tag : Tag -> Encoder -> Encoder
-tag t (Encoder enclosedEnc) =
-    Encoder
-        (\strategy ->
-            BE.sequence
-                [ encodeHeader 6 (tagToInt t)
-                , enclosedEnc strategy
-                ]
-        )
+tag t enclosed =
+    case enclosed of
+        Direct be ->
+            Direct
+                (BE.sequence
+                    [ encodeHeader 6 (tagToInt t)
+                    , be
+                    ]
+                )
+
+        Encoder enc ->
+            Encoder
+                (\strategy ->
+                    BE.sequence
+                        [ encodeHeader 6 (tagToInt t)
+                        , enc strategy
+                        ]
+                )
 
 
 {-| Encode a keyed record as a CBOR map with a shared key encoder.
@@ -478,10 +515,14 @@ Produces a CBOR Sequence (RFC 8742).
 -}
 sequence : List Encoder -> Encoder
 sequence encoders =
-    Encoder
-        (\strategy ->
-            BE.sequence (List.map (\(Encoder enc) -> enc strategy) encoders)
-        )
+    if allDirect encoders then
+        Direct (BE.sequence (List.map unwrapDirect encoders))
+
+    else
+        Encoder
+            (\strategy ->
+                BE.sequence (List.map (applyStrategy strategy) encoders)
+            )
 
 
 
@@ -492,7 +533,7 @@ sequence encoders =
 -}
 item : CborItem -> Encoder
 item cborItem =
-    Encoder (\_ -> encodeItem cborItem)
+    Direct (encodeItem cborItem)
 
 
 {-| Inject pre-encoded CBOR bytes without validation. Ignores strategy.
@@ -502,7 +543,7 @@ If the bytes are not valid CBOR, the output is malformed.
 -}
 rawUnsafe : Bytes.Bytes -> Encoder
 rawUnsafe bs =
-    Encoder (\_ -> BE.bytes bs)
+    Direct (BE.bytes bs)
 
 
 
