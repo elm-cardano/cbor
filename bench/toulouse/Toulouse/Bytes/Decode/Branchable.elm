@@ -1,13 +1,32 @@
 module Toulouse.Bytes.Decode.Branchable exposing
-    ( Decoder, decode, fromDecoder
-    , succeed, fail
-    , unsignedInt8, unsignedInt16, unsignedInt32, signedInt8, signedInt16, signedInt32
-    , float32, float64
-    , string
+    ( Decoder
+    , andThen
     , bytes
-    , map, map2, map3, map4, map5
-    , keep, ignore, skip
-    , andThen, oneOf, repeat, loop, peek
+    , decode
+    , fail
+    , float32
+    , float64
+    , fromDecoder
+    , ignore
+    , keep
+    , loop
+    , map
+    , map2
+    , map3
+    , map4
+    , map5
+    , oneOf
+    , peek
+    , repeat
+    , signedInt16
+    , signedInt32
+    , signedInt8
+    , skip
+    , string
+    , succeed
+    , unsignedInt16
+    , unsignedInt32
+    , unsignedInt8
     )
 
 import Bytes exposing (Bytes)

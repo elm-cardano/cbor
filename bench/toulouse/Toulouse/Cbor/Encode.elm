@@ -1,12 +1,43 @@
 module Toulouse.Cbor.Encode exposing
-    ( Encoder, encode, sequence, maybe, keyValue
-    , bool, int, float, string, bytes, null, undefined
-    , float16, float32, float64
-    , list, indefiniteList, length, associativeList, dict, size
-    , Step, record, fields, field, optionalField, tuple, elems, elem, optionalElem
-    , beginString, beginBytes, beginList, beginDict, break
-    , tag, tagged
-    , any, raw
+    ( Encoder
+    , Step
+    , any
+    , associativeList
+    , beginBytes
+    , beginDict
+    , beginList
+    , beginString
+    , bool
+    , break
+    , bytes
+    , dict
+    , elem
+    , elems
+    , encode
+    , field
+    , fields
+    , float
+    , float16
+    , float32
+    , float64
+    , indefiniteList
+    , int
+    , keyValue
+    , length
+    , list
+    , maybe
+    , null
+    , optionalElem
+    , optionalField
+    , raw
+    , record
+    , sequence
+    , size
+    , string
+    , tag
+    , tagged
+    , tuple
+    , undefined
     )
 
 import Bitwise exposing (or, shiftLeftBy)

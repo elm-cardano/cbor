@@ -1,20 +1,58 @@
 module Toulouse.Cbor.Decode exposing
-    ( Decoder, decode, maybe
-    , bool, int, bigint, float, string, bytes
-    , list, length, dict, size, associativeList, fold
-    , Step, record, fields, field, optionalField, tuple, elems, elem, optionalElem
-    , succeed, fail, andThen, ignoreThen, thenIgnore, map, map2, map3, map4, map5, traverse
-    , oneOf, keep, ignore
-    , beginString, beginBytes, beginList, beginDict, break
-    , tag, tagged
-    , any, raw
+    ( Decoder
+    , Step
+    , andThen
+    , any
+    , associativeList
+    , beginBytes
+    , beginDict
+    , beginList
+    , beginString
+    , bigint
+    , bool
+    , break
+    , bytes
+    , decode
+    , dict
+    , elem
+    , elems
+    , fail
+    , field
+    , fields
+    , float
+    , fold
+    , ignore
+    , ignoreThen
+    , int
+    , keep
+    , length
+    , list
+    , map
+    , map2
+    , map3
+    , map4
+    , map5
+    , maybe
+    , oneOf
+    , optionalElem
+    , optionalField
+    , raw
+    , record
+    , size
+    , string
+    , succeed
+    , tag
+    , tagged
+    , thenIgnore
+    , traverse
+    , tuple
     )
 
 import Bitwise exposing (and, shiftLeftBy, shiftRightBy)
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode
-import Bytes.Floating.Decode as D
 import Bytes.Encode as E
+import Bytes.Floating.Decode as D
 import Dict exposing (Dict)
 import Toulouse.Bytes.Decode.Branchable as D
 import Toulouse.Cbor exposing (CborItem(..), Sign(..))
