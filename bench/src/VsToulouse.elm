@@ -83,10 +83,9 @@ elm-bench -f VsToulouse.enc_ec_nested100 -f VsToulouse.enc_tl_nested100 "()"
 @docs enc_ec_nested100, enc_tl_nested100
 
 
-# Encode list of 100 wrapped ints (non-Direct path)
+# Encode list of 100 wrapped ints
 
-Each element is a 1-element CBOR array wrapping an int. The wrapper prevents
-the `allDirect` fast path, measuring the `Encoder` closure dispatch path.
+Each element is a 1-element CBOR array wrapping an int.
 
 ```sh
 elm-bench -f VsToulouse.enc_ec_list100_mixed -f VsToulouse.enc_tl_list100_mixed "()"
@@ -95,10 +94,9 @@ elm-bench -f VsToulouse.enc_ec_list100_mixed -f VsToulouse.enc_tl_list100_mixed 
 @docs enc_ec_list100_mixed, enc_tl_list100_mixed
 
 
-# Encode map of 100 wrapped int pairs (non-Direct path)
+# Encode map of 100 wrapped int pairs
 
-Each value is a 1-element CBOR array wrapping an int. The wrapper prevents
-the `allDirectPairs` fast path, measuring the `Encoder` closure dispatch path.
+Each value is a 1-element CBOR array wrapping an int.
 
 ```sh
 elm-bench -f VsToulouse.enc_ec_map100_mixed -f VsToulouse.enc_tl_map100_mixed "()"
@@ -149,7 +147,7 @@ elm-bench -f VsToulouse.dec_ec_keyed10 -f VsToulouse.dec_tl_keyed10 "()"
 -}
 
 import Bytes exposing (Bytes)
-import Cbor exposing (FloatWidth(..))
+import Cbor exposing (FloatWidth(..), Length(..))
 import Cbor.Decode as CD
 import Cbor.Encode as CE
 import Toulouse.Cbor.Decode as TD
@@ -184,7 +182,6 @@ type alias R10 =
 -- ============================================================================
 -- TEST DATA
 -- ============================================================================
--- Pre-built encoders (encoding benchmarks measure encode call only)
 
 
 intRange100 : List Int
@@ -202,58 +199,14 @@ float64Values =
     List.map (\i -> pi * toFloat (i + 1)) (List.range 0 999)
 
 
-ecListEncoder : CE.Encoder
-ecListEncoder =
-    CE.list CE.int intRange100
+intRange100Mixed : List (List Int)
+intRange100Mixed =
+    List.map (\i -> [ i ]) intRange100
 
 
-tlListEncoder : TE.Encoder
-tlListEncoder =
-    TE.list TE.int intRange100
-
-
-ecMapEncoder : CE.Encoder
-ecMapEncoder =
-    CE.map (List.map (\( k, v ) -> ( CE.int k, CE.int v )) intPairs100)
-
-
-tlMapEncoder : TE.Encoder
-tlMapEncoder =
-    TE.associativeList TE.int TE.int intPairs100
-
-
-ecFloatEncoder : CE.Encoder
-ecFloatEncoder =
-    CE.list (\f -> CE.floatWithWidth FW64 f) float64Values
-
-
-tlFloatEncoder : TE.Encoder
-tlFloatEncoder =
-    TE.list TE.float float64Values
-
-
-ecListMixedEncoder : CE.Encoder
-ecListMixedEncoder =
-    CE.list (\i -> CE.array [ CE.int i ]) intRange100
-
-
-tlListMixedEncoder : TE.Encoder
-tlListMixedEncoder =
-    TE.list (\i -> TE.list TE.int [ i ]) intRange100
-
-
-ecMapMixedEncoder : CE.Encoder
-ecMapMixedEncoder =
-    CE.map (List.map (\( k, v ) -> ( CE.int k, CE.array [ CE.int v ] )) intPairs100)
-
-
-tlMapMixedEncoder : TE.Encoder
-tlMapMixedEncoder =
-    TE.associativeList TE.int (\v -> TE.list TE.int [ v ]) intPairs100
-
-
-
--- Record values (structured encoding benchmarks measure construction + serialization)
+intPairs100Mixed : List ( Int, List Int )
+intPairs100Mixed =
+    List.map (\( i, v ) -> ( i, [ v ] )) intPairs100
 
 
 r10 : R10
@@ -266,18 +219,139 @@ r3List =
     List.map (\i -> { a = i, b = i * 3, c = i * 7 }) (List.range 0 99)
 
 
-ecEncodeR3 : R3 -> CE.Encoder
-ecEncodeR3 r =
-    CE.array [ CE.int r.a, CE.int r.b, CE.int r.c ]
+
+-- ============================================================================
+-- ENCODERS (functions accepting data, measuring construction + serialization)
+-- ============================================================================
 
 
-tlEncodeR3 : R3 -> TE.Encoder
-tlEncodeR3 =
+ecListEncoder : List Int -> CE.Encoder
+ecListEncoder ints =
+    CE.list Definite CE.int ints
+
+
+tlListEncoder : List Int -> TE.Encoder
+tlListEncoder =
+    TE.list TE.int
+
+
+ecMapEncoder : List ( Int, Int ) -> CE.Encoder
+ecMapEncoder pairs =
+    CE.map CE.Unsorted Definite (List.map (\( k, v ) -> ( CE.int k, CE.int v )) pairs)
+
+
+tlMapEncoder : List ( Int, Int ) -> TE.Encoder
+tlMapEncoder =
+    TE.associativeList TE.int TE.int
+
+
+ecFloatEncoder : List Float -> CE.Encoder
+ecFloatEncoder floats =
+    CE.list Definite (\f -> CE.floatWithWidth FW64 f) floats
+
+
+tlFloatEncoder : List Float -> TE.Encoder
+tlFloatEncoder =
+    TE.list TE.float
+
+
+ecListMixedEncoder : List (List Int) -> CE.Encoder
+ecListMixedEncoder items =
+    CE.list Definite (\vs -> CE.list Definite CE.int vs) items
+
+
+tlListMixedEncoder : List (List Int) -> TE.Encoder
+tlListMixedEncoder =
+    TE.list (TE.list TE.int)
+
+
+ecMapMixedEncoder : List ( Int, List Int ) -> CE.Encoder
+ecMapMixedEncoder pairs =
+    CE.map CE.Unsorted Definite (List.map (\( k, vs ) -> ( CE.int k, CE.list Definite CE.int vs )) pairs)
+
+
+tlMapMixedEncoder : List ( Int, List Int ) -> TE.Encoder
+tlMapMixedEncoder =
+    TE.associativeList TE.int (TE.list TE.int)
+
+
+ecTuple10Encoder : R10 -> CE.Encoder
+ecTuple10Encoder r =
+    CE.array Definite
+        [ CE.int r.a
+        , CE.int r.b
+        , CE.int r.c
+        , CE.int r.d
+        , CE.int r.e
+        , CE.int r.f
+        , CE.int r.g
+        , CE.int r.h
+        , CE.int r.i
+        , CE.int r.j
+        ]
+
+
+tlTuple10Encoder : R10 -> TE.Encoder
+tlTuple10Encoder =
     TE.tuple <|
         TE.elems
             >> TE.elem TE.int .a
             >> TE.elem TE.int .b
             >> TE.elem TE.int .c
+            >> TE.elem TE.int .d
+            >> TE.elem TE.int .e
+            >> TE.elem TE.int .f
+            >> TE.elem TE.int .g
+            >> TE.elem TE.int .h
+            >> TE.elem TE.int .i
+            >> TE.elem TE.int .j
+
+
+ecKeyed10Encoder : R10 -> CE.Encoder
+ecKeyed10Encoder r =
+    CE.keyedRecord CE.Unsorted Definite CE.int
+        [ ( 0, Just (CE.int r.a) )
+        , ( 1, Just (CE.int r.b) )
+        , ( 2, Just (CE.int r.c) )
+        , ( 3, Just (CE.int r.d) )
+        , ( 4, Just (CE.int r.e) )
+        , ( 5, Just (CE.int r.f) )
+        , ( 6, Just (CE.int r.g) )
+        , ( 7, Just (CE.int r.h) )
+        , ( 8, Just (CE.int r.i) )
+        , ( 9, Just (CE.int r.j) )
+        ]
+
+
+tlKeyed10Encoder : R10 -> TE.Encoder
+tlKeyed10Encoder =
+    TE.record TE.int <|
+        TE.fields
+            >> TE.field 0 TE.int .a
+            >> TE.field 1 TE.int .b
+            >> TE.field 2 TE.int .c
+            >> TE.field 3 TE.int .d
+            >> TE.field 4 TE.int .e
+            >> TE.field 5 TE.int .f
+            >> TE.field 6 TE.int .g
+            >> TE.field 7 TE.int .h
+            >> TE.field 8 TE.int .i
+            >> TE.field 9 TE.int .j
+
+
+ecNested100Encoder : List R3 -> CE.Encoder
+ecNested100Encoder rs =
+    CE.list Definite (\r -> CE.array Definite [ CE.int r.a, CE.int r.b, CE.int r.c ]) rs
+
+
+tlNested100Encoder : List R3 -> TE.Encoder
+tlNested100Encoder =
+    TE.list <|
+        TE.tuple <|
+            TE.elems
+                >> TE.elem TE.int .a
+                >> TE.elem TE.int .b
+                >> TE.elem TE.int .c
 
 
 
@@ -287,23 +361,23 @@ tlEncodeR3 =
 
 array100Data : Bytes
 array100Data =
-    CE.encode CE.unsorted ecListEncoder
+    CE.encode (ecListEncoder intRange100)
 
 
 map100Data : Bytes
 map100Data =
-    CE.encode CE.unsorted ecMapEncoder
+    CE.encode (ecMapEncoder intPairs100)
 
 
 record10Data : Bytes
 record10Data =
-    CE.encode CE.unsorted (CE.list CE.int (List.range 1 10))
+    CE.encode (CE.list Definite CE.int (List.range 1 10))
 
 
 keyedRecord10Data : Bytes
 keyedRecord10Data =
-    CE.encode CE.unsorted
-        (CE.map (List.map (\i -> ( CE.int i, CE.int (i * 7) )) (List.range 0 9)))
+    CE.encode
+        (CE.map CE.Unsorted Definite (List.map (\i -> ( CE.int i, CE.int (i * 7) )) (List.range 0 9)))
 
 
 
@@ -384,12 +458,12 @@ tlDecKR10 =
 
 enc_ec_list100 : () -> Bytes
 enc_ec_list100 () =
-    CE.encode CE.unsorted ecListEncoder
+    CE.encode (ecListEncoder intRange100)
 
 
 enc_tl_list100 : () -> Bytes
 enc_tl_list100 () =
-    TE.encode tlListEncoder
+    TE.encode (tlListEncoder intRange100)
 
 
 
@@ -400,12 +474,12 @@ enc_tl_list100 () =
 
 enc_ec_map100 : () -> Bytes
 enc_ec_map100 () =
-    CE.encode CE.unsorted ecMapEncoder
+    CE.encode (ecMapEncoder intPairs100)
 
 
 enc_tl_map100 : () -> Bytes
 enc_tl_map100 () =
-    TE.encode tlMapEncoder
+    TE.encode (tlMapEncoder intPairs100)
 
 
 
@@ -416,12 +490,12 @@ enc_tl_map100 () =
 
 enc_ec_float1000 : () -> Bytes
 enc_ec_float1000 () =
-    CE.encode CE.unsorted ecFloatEncoder
+    CE.encode (ecFloatEncoder float64Values)
 
 
 enc_tl_float1000 : () -> Bytes
 enc_tl_float1000 () =
-    TE.encode tlFloatEncoder
+    TE.encode (tlFloatEncoder float64Values)
 
 
 
@@ -435,40 +509,12 @@ enc_tl_float1000 () =
 
 enc_ec_tuple10 : () -> Bytes
 enc_ec_tuple10 () =
-    CE.encode CE.unsorted
-        (CE.array
-            [ CE.int r10.a
-            , CE.int r10.b
-            , CE.int r10.c
-            , CE.int r10.d
-            , CE.int r10.e
-            , CE.int r10.f
-            , CE.int r10.g
-            , CE.int r10.h
-            , CE.int r10.i
-            , CE.int r10.j
-            ]
-        )
+    CE.encode (ecTuple10Encoder r10)
 
 
 enc_tl_tuple10 : () -> Bytes
 enc_tl_tuple10 () =
-    TE.encode
-        (TE.tuple
-            (TE.elems
-                >> TE.elem TE.int .a
-                >> TE.elem TE.int .b
-                >> TE.elem TE.int .c
-                >> TE.elem TE.int .d
-                >> TE.elem TE.int .e
-                >> TE.elem TE.int .f
-                >> TE.elem TE.int .g
-                >> TE.elem TE.int .h
-                >> TE.elem TE.int .i
-                >> TE.elem TE.int .j
-            )
-            r10
-        )
+    TE.encode (tlTuple10Encoder r10)
 
 
 
@@ -481,40 +527,12 @@ enc_tl_tuple10 () =
 
 enc_ec_keyed10 : () -> Bytes
 enc_ec_keyed10 () =
-    CE.encode CE.unsorted
-        (CE.keyedRecord CE.int
-            [ ( 0, Just (CE.int r10.a) )
-            , ( 1, Just (CE.int r10.b) )
-            , ( 2, Just (CE.int r10.c) )
-            , ( 3, Just (CE.int r10.d) )
-            , ( 4, Just (CE.int r10.e) )
-            , ( 5, Just (CE.int r10.f) )
-            , ( 6, Just (CE.int r10.g) )
-            , ( 7, Just (CE.int r10.h) )
-            , ( 8, Just (CE.int r10.i) )
-            , ( 9, Just (CE.int r10.j) )
-            ]
-        )
+    CE.encode (ecKeyed10Encoder r10)
 
 
 enc_tl_keyed10 : () -> Bytes
 enc_tl_keyed10 () =
-    TE.encode
-        (TE.record TE.int
-            (TE.fields
-                >> TE.field 0 TE.int .a
-                >> TE.field 1 TE.int .b
-                >> TE.field 2 TE.int .c
-                >> TE.field 3 TE.int .d
-                >> TE.field 4 TE.int .e
-                >> TE.field 5 TE.int .f
-                >> TE.field 6 TE.int .g
-                >> TE.field 7 TE.int .h
-                >> TE.field 8 TE.int .i
-                >> TE.field 9 TE.int .j
-            )
-            r10
-        )
+    TE.encode (tlKeyed10Encoder r10)
 
 
 
@@ -526,48 +544,46 @@ enc_tl_keyed10 () =
 
 enc_ec_nested100 : () -> Bytes
 enc_ec_nested100 () =
-    CE.encode CE.unsorted (CE.list ecEncodeR3 r3List)
+    CE.encode (ecNested100Encoder r3List)
 
 
 enc_tl_nested100 : () -> Bytes
 enc_tl_nested100 () =
-    TE.encode (TE.list tlEncodeR3 r3List)
+    TE.encode (tlNested100Encoder r3List)
 
 
 
 -- ============================================================================
--- 6b. ENCODE LIST OF 100 WRAPPED INTS (NON-DIRECT PATH)
+-- 6b. ENCODE LIST OF 100 WRAPPED INTS
 -- ============================================================================
--- Each element is CE.array [CE.int i], which is an Encoder (not Direct).
--- This prevents the allDirect fast path in the outer list/array.
+-- Each element is CE.list Definite CE.int [i], a 1-element CBOR array wrapping an int.
 
 
 enc_ec_list100_mixed : () -> Bytes
 enc_ec_list100_mixed () =
-    CE.encode CE.unsorted ecListMixedEncoder
+    CE.encode (ecListMixedEncoder intRange100Mixed)
 
 
 enc_tl_list100_mixed : () -> Bytes
 enc_tl_list100_mixed () =
-    TE.encode tlListMixedEncoder
+    TE.encode (tlListMixedEncoder intRange100Mixed)
 
 
 
 -- ============================================================================
--- 6c. ENCODE MAP OF 100 WRAPPED INT PAIRS (NON-DIRECT PATH)
+-- 6c. ENCODE MAP OF 100 WRAPPED INT PAIRS
 -- ============================================================================
--- Each value is CE.array [CE.int v], which is an Encoder (not Direct).
--- This prevents the allDirectPairs fast path in the outer map.
+-- Each value is CE.list Definite CE.int [v], a 1-element CBOR array wrapping an int.
 
 
 enc_ec_map100_mixed : () -> Bytes
 enc_ec_map100_mixed () =
-    CE.encode CE.unsorted ecMapMixedEncoder
+    CE.encode (ecMapMixedEncoder intPairs100Mixed)
 
 
 enc_tl_map100_mixed : () -> Bytes
 enc_tl_map100_mixed () =
-    TE.encode tlMapMixedEncoder
+    TE.encode (tlMapMixedEncoder intPairs100Mixed)
 
 
 
