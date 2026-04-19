@@ -7,7 +7,7 @@ Each `good_*` compiles. Uncomment any `bad_*` to see the expected error.
 -}
 
 import Bytes exposing (Bytes)
-import PhantomEncode as PE
+import PhantomTreeEncode as PE
 
 
 allBytes : List Bytes
