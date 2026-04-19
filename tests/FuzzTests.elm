@@ -54,11 +54,11 @@ byteRoundTrip encoder =
     let
         original : Bytes
         original =
-            CE.encode CE.deterministic encoder
+            CE.encode encoder
     in
     case CD.decode CD.item original of
         Ok cborItem ->
-            CE.encode CE.deterministic (CE.item cborItem)
+            CE.encode (CE.item cborItem)
                 |> Hex.fromBytes
                 |> Expect.equal (Hex.fromBytes original)
 
@@ -77,7 +77,7 @@ suite =
         , byteLevelRoundTripProperties
         , shortestFormProperties
         , lengthEquivalenceProperties
-        , strategyProperties
+        , sortProperties
         , escapeHatchProperties
         ]
 
@@ -92,33 +92,33 @@ roundTripProperties =
     describe "Round-trip encode/decode identity"
         [ fuzz Fuzz.int "int" <|
             \n ->
-                CE.encode CE.deterministic (CE.int n)
+                CE.encode (CE.int n)
                     |> CD.decode CD.int
                     |> Expect.equal (Ok n)
         , fuzz Fuzz.niceFloat "float" <|
             \f ->
-                CE.encode CE.deterministic (CE.float f)
+                CE.encode (CE.float f)
                     |> CD.decode CD.float
                     |> Expect.equal (Ok f)
         , fuzz Fuzz.bool "bool" <|
             \b ->
-                CE.encode CE.deterministic (CE.bool b)
+                CE.encode (CE.bool b)
                     |> CD.decode CD.bool
                     |> Expect.equal (Ok b)
         , fuzz Fuzz.string "string" <|
             \s ->
-                CE.encode CE.deterministic (CE.string s)
+                CE.encode (CE.string s)
                     |> CD.decode CD.string
                     |> Expect.equal (Ok s)
         , fuzz smallBytes "bytes" <|
             \bs ->
-                CE.encode CE.deterministic (CE.bytes bs)
+                CE.encode (CE.bytes bs)
                     |> CD.decode CD.bytes
                     |> Result.map Hex.fromBytes
                     |> Expect.equal (Ok (Hex.fromBytes bs))
         , fuzz (Fuzz.list Fuzz.int) "list of ints" <|
             \xs ->
-                CE.encode CE.deterministic (CE.list CE.int xs)
+                CE.encode (CE.list Definite CE.int xs)
                     |> CD.decode (CD.array CD.int)
                     |> Expect.equal (Ok xs)
         , fuzz (Fuzz.list (Fuzz.pair Fuzz.int Fuzz.int)) "map of int->int" <|
@@ -127,18 +127,14 @@ roundTripProperties =
                     unique : List ( Int, Int )
                     unique =
                         deduplicateKeys pairs
-
-                    encoder : CE.Encoder
-                    encoder =
-                        CE.map (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique)
                 in
-                CE.encode CE.deterministic encoder
+                CE.encode (CE.map CE.Unsorted Definite (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique))
                     |> CD.decode (CD.keyValue CD.int CD.int)
                     |> Result.map (List.sortBy Tuple.first)
                     |> Expect.equal (Ok (List.sortBy Tuple.first unique))
         , fuzz Fuzz.int "tagged int" <|
             \n ->
-                CE.encode CE.deterministic (CE.tag EpochDateTime (CE.int n))
+                CE.encode (CE.tag EpochDateTime (CE.int n))
                     |> CD.decode (CD.tag EpochDateTime CD.int)
                     |> Expect.equal (Ok n)
         ]
@@ -179,7 +175,7 @@ byteLevelRoundTripProperties =
 
                     encoded : Bytes
                     encoded =
-                        CE.encode CE.deterministic (CE.item (CborInt64 Positive argBytes))
+                        CE.encode (CE.item (CborInt64 Positive argBytes))
                 in
                 case CD.decode CD.item encoded of
                     Ok (CborInt64 Positive bs) ->
@@ -204,7 +200,7 @@ byteLevelRoundTripProperties =
 
                     encoded : Bytes
                     encoded =
-                        CE.encode CE.deterministic (CE.item (CborInt64 Negative argBytes))
+                        CE.encode (CE.item (CborInt64 Negative argBytes))
                 in
                 case CD.decode CD.item encoded of
                     Ok (CborInt64 Negative bs) ->
@@ -225,35 +221,35 @@ shortestFormProperties =
     describe "Integer shortest form"
         [ fuzz (Fuzz.intRange 0 23) "positive 0..23 -> 1 byte" <|
             \n ->
-                Bytes.width (CE.encode CE.deterministic (CE.int n))
+                Bytes.width (CE.encode (CE.int n))
                     |> Expect.equal 1
         , fuzz (Fuzz.intRange 24 255) "positive 24..255 -> 2 bytes" <|
             \n ->
-                Bytes.width (CE.encode CE.deterministic (CE.int n))
+                Bytes.width (CE.encode (CE.int n))
                     |> Expect.equal 2
         , fuzz (Fuzz.intRange 256 65535) "positive 256..65535 -> 3 bytes" <|
             \n ->
-                Bytes.width (CE.encode CE.deterministic (CE.int n))
+                Bytes.width (CE.encode (CE.int n))
                     |> Expect.equal 3
         , fuzz (Fuzz.intRange 65536 2147483647) "positive 65536..2^31-1 -> 5 bytes" <|
             \n ->
-                Bytes.width (CE.encode CE.deterministic (CE.int n))
+                Bytes.width (CE.encode (CE.int n))
                     |> Expect.equal 5
         , fuzz (Fuzz.intRange -24 -1) "negative -24..-1 -> 1 byte" <|
             \n ->
-                Bytes.width (CE.encode CE.deterministic (CE.int n))
+                Bytes.width (CE.encode (CE.int n))
                     |> Expect.equal 1
         , fuzz (Fuzz.intRange -256 -25) "negative -256..-25 -> 2 bytes" <|
             \n ->
-                Bytes.width (CE.encode CE.deterministic (CE.int n))
+                Bytes.width (CE.encode (CE.int n))
                     |> Expect.equal 2
         , fuzz (Fuzz.intRange -65536 -257) "negative -65536..-257 -> 3 bytes" <|
             \n ->
-                Bytes.width (CE.encode CE.deterministic (CE.int n))
+                Bytes.width (CE.encode (CE.int n))
                     |> Expect.equal 3
         , fuzz (Fuzz.intRange -2147483648 -65537) "negative -2^31..-65537 -> 5 bytes" <|
             \n ->
-                Bytes.width (CE.encode CE.deterministic (CE.int n))
+                Bytes.width (CE.encode (CE.int n))
                     |> Expect.equal 5
         , fuzz2 (Fuzz.intRange 0 2147483647) (Fuzz.intRange 0 2147483647) "width monotonic for positives" <|
             \a b ->
@@ -266,8 +262,8 @@ shortestFormProperties =
                     big =
                         max a b
                 in
-                Bytes.width (CE.encode CE.deterministic (CE.int big))
-                    |> Expect.atLeast (Bytes.width (CE.encode CE.deterministic (CE.int small)))
+                Bytes.width (CE.encode (CE.int big))
+                    |> Expect.atLeast (Bytes.width (CE.encode (CE.int small)))
         ]
 
 
@@ -278,26 +274,17 @@ shortestFormProperties =
 
 lengthEquivalenceProperties : Test
 lengthEquivalenceProperties =
-    let
-        indefiniteStrategy : CE.Strategy
-        indefiniteStrategy =
-            { sortKeys = Nothing, lengthMode = Indefinite }
-    in
     describe "Definite/indefinite decode equivalence"
         [ fuzz (Fuzz.list Fuzz.int) "array" <|
             \xs ->
                 let
-                    encoder : CE.Encoder
-                    encoder =
-                        CE.list CE.int xs
-
                     decoder : BD.Decoder ctx CD.DecodeError (List Int)
                     decoder =
                         CD.toBD (CD.array CD.int)
                 in
                 Expect.equal
-                    (BD.decode decoder (CE.encode CE.deterministic encoder))
-                    (BD.decode decoder (CE.encode indefiniteStrategy encoder))
+                    (BD.decode decoder (CE.encode (CE.list Definite CE.int xs)))
+                    (BD.decode decoder (CE.encode (CE.list Indefinite CE.int xs)))
         , fuzz (Fuzz.list (Fuzz.pair Fuzz.int Fuzz.int)) "map" <|
             \pairs ->
                 let
@@ -305,9 +292,9 @@ lengthEquivalenceProperties =
                     unique =
                         deduplicateKeys pairs
 
-                    encoder : CE.Encoder
-                    encoder =
-                        CE.map (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique)
+                    encodeEntries : Length -> CE.Encoder
+                    encodeEntries len =
+                        CE.map CE.Unsorted len (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique)
 
                     decoder : BD.Decoder ctx CD.DecodeError (List ( Int, Int ))
                     decoder =
@@ -318,16 +305,16 @@ lengthEquivalenceProperties =
                         Result.map (List.sortBy Tuple.first)
                 in
                 Expect.equal
-                    (sortResult (BD.decode decoder (CE.encode CE.deterministic encoder)))
-                    (sortResult (BD.decode decoder (CE.encode indefiniteStrategy encoder)))
+                    (sortResult (BD.decode decoder (CE.encode (encodeEntries Definite))))
+                    (sortResult (BD.decode decoder (CE.encode (encodeEntries Indefinite))))
         , fuzz (Fuzz.list Fuzz.string) "chunked string decodes to concatenation" <|
             \chunks ->
-                CE.encode CE.deterministic (CE.stringChunked chunks)
+                CE.encode (CE.stringChunked chunks)
                     |> CD.decode CD.string
                     |> Expect.equal (Ok (String.concat chunks))
         , fuzz (Fuzz.list smallBytes) "chunked bytes decodes to concatenation" <|
             \chunks ->
-                CE.encode CE.deterministic (CE.bytesChunked chunks)
+                CE.encode (CE.bytesChunked chunks)
                     |> CD.decode CD.bytes
                     |> Result.map Hex.fromBytes
                     |> Expect.equal (Ok (Hex.fromBytes (concatBytes chunks)))
@@ -335,15 +322,15 @@ lengthEquivalenceProperties =
 
 
 
--- 5. STRATEGY EQUIVALENCE
--- all strategies produce the same decoded key-value set
+-- 5. SORT EQUIVALENCE
+-- all sort orders produce the same decoded key-value set
 
 
-strategyProperties : Test
-strategyProperties =
-    describe "Strategy equivalence"
+sortProperties : Test
+sortProperties =
+    describe "Sort equivalence"
         [ fuzz (Fuzz.list (Fuzz.pair (Fuzz.intRange 0 1000) (Fuzz.intRange 0 1000)))
-            "deterministic, canonical, and unsorted decode to same values"
+            "deterministicSort, canonicalSort, and Unsorted decode to same values"
           <|
             \pairs ->
                 let
@@ -351,9 +338,9 @@ strategyProperties =
                     unique =
                         deduplicateKeys pairs
 
-                    encoder : CE.Encoder
-                    encoder =
-                        CE.map (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique)
+                    entries : List ( CE.Encoder, CE.Encoder )
+                    entries =
+                        List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique
 
                     decoder : BD.Decoder ctx CD.DecodeError (List ( Int, Int ))
                     decoder =
@@ -365,15 +352,15 @@ strategyProperties =
 
                     detResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
                     detResult =
-                        sortResult (BD.decode decoder (CE.encode CE.deterministic encoder))
+                        sortResult (BD.decode decoder (CE.encode (CE.map CE.deterministicSort Definite entries)))
 
                     canResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
                     canResult =
-                        sortResult (BD.decode decoder (CE.encode CE.canonical encoder))
+                        sortResult (BD.decode decoder (CE.encode (CE.map CE.canonicalSort Definite entries)))
 
                     unsResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
                     unsResult =
-                        sortResult (BD.decode decoder (CE.encode CE.unsorted encoder))
+                        sortResult (BD.decode decoder (CE.encode (CE.map CE.Unsorted Definite entries)))
                 in
                 Expect.all
                     [ \_ -> Expect.equal detResult canResult
@@ -392,7 +379,7 @@ escapeHatchProperties =
     describe "Escape hatches"
         [ fuzz smallBytes "rawUnsafe passes through unchanged" <|
             \bs ->
-                CE.encode CE.deterministic (CE.rawUnsafe bs)
+                CE.encode (CE.rawUnsafe bs)
                     |> Hex.fromBytes
                     |> Expect.equal (Hex.fromBytes bs)
         , fuzz2 Fuzz.int Fuzz.asciiString "sequence is byte concatenation without wrapping" <|
@@ -400,15 +387,15 @@ escapeHatchProperties =
                 let
                     seqBytes : Bytes
                     seqBytes =
-                        CE.encode CE.deterministic (CE.sequence [ CE.int n, CE.string s ])
+                        CE.encode (CE.sequence [ CE.int n, CE.string s ])
 
                     intBytes : Bytes
                     intBytes =
-                        CE.encode CE.deterministic (CE.int n)
+                        CE.encode (CE.int n)
 
                     strBytes : Bytes
                     strBytes =
-                        CE.encode CE.deterministic (CE.string s)
+                        CE.encode (CE.string s)
                 in
                 Hex.fromBytes seqBytes
                     |> Expect.equal (Hex.fromBytes intBytes ++ Hex.fromBytes strBytes)
@@ -431,7 +418,7 @@ escapeHatchProperties =
 
                     encoded : Bytes
                     encoded =
-                        CE.encode CE.deterministic (CE.keyedRecord CE.int entries)
+                        CE.encode (CE.keyedRecord CE.Unsorted Definite CE.int entries)
                 in
                 case CD.decode CD.item encoded of
                     Ok (CborMap _ mapEntries) ->

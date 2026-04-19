@@ -1,17 +1,20 @@
 module Cbor.Encode exposing
-    ( Encoder, Strategy, encode
+    ( Encoder, encode
     , int, float, bool, null, undefined, string, bytes, simple
     , intWithWidth, floatWithWidth
     , stringChunked, bytesChunked
-    , array, map, tag, keyedRecord, list, sequence
+    , Sort(..), array, map, tag, keyedRecord, list, sequence
     , item, rawUnsafe
-    , deterministic, canonical, ctap2, unsorted
+    , deterministicSort, canonicalSort
     )
 
 {-| CBOR encoding combinators.
 
-Build encoders for your domain types, then apply a `Strategy` to produce bytes.
+Build encoders for your domain types, then produce bytes.
+Length and sort decisions are made at construction time —
+no separate strategy parameter is needed.
 
+    import Cbor exposing (Length(..))
     import Cbor.Encode as CE
 
     type alias Person =
@@ -19,14 +22,14 @@ Build encoders for your domain types, then apply a `Strategy` to produce bytes.
 
     encodePerson : Person -> CE.Encoder
     encodePerson p =
-        CE.keyedRecord CE.int
+        CE.keyedRecord CE.Unsorted Definite CE.int
             [ ( 0, Just (CE.string p.name) )
             , ( 1, Just (CE.int p.age) )
             ]
 
-    CE.encode CE.deterministic (encodePerson alice)
+    CE.encode (encodePerson alice)
 
-@docs Encoder, Strategy, encode
+@docs Encoder, encode
 
 
 ## Primitives
@@ -46,7 +49,7 @@ Build encoders for your domain types, then apply a `Strategy` to produce bytes.
 
 ## Collections
 
-@docs array, map, tag, keyedRecord, list, sequence
+@docs Sort, array, map, tag, keyedRecord, list, sequence
 
 
 ## Escape Hatches
@@ -54,9 +57,9 @@ Build encoders for your domain types, then apply a `Strategy` to produce bytes.
 @docs item, rawUnsafe
 
 
-## Predefined Strategies
+## Predefined Sort Orders
 
-@docs deterministic, canonical, ctap2, unsorted
+@docs deterministicSort, canonicalSort
 
 -}
 
@@ -70,134 +73,58 @@ import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Si
 import Hex
 
 
-{-| An encoder that produces CBOR bytes when given a `Strategy`.
+{-| An encoder that produces CBOR bytes.
 -}
 type Encoder
-    = Encoder (Strategy -> BE.Encoder)
-    | Direct BE.Encoder
+    = Encoder BE.Encoder
 
 
-{-| Controls key ordering and length mode for collections.
+{-| Sort strategy for map keys.
 
-  - `sortKeys` reorders map entries. `Nothing` preserves insertion order and
-    skips key serialization (fast path). `Just fn` serializes each key to
-    `Bytes` for comparison and reorders entries using `fn`.
-  - `lengthMode` controls whether arrays and maps use definite or indefinite
-    length encoding.
+  - `Unsorted` preserves insertion order (fast path — no key serialization).
+  - `Sorted toComparable` serializes each key to `Bytes`, extracts a
+    comparable via `toComparable`, and sorts entries by that value.
 
 -}
-type alias Strategy =
-    { sortKeys : Maybe (List ( Bytes.Bytes, BE.Encoder ) -> List ( Bytes.Bytes, BE.Encoder ))
-    , lengthMode : Length
-    }
+type Sort comparable
+    = Unsorted
+    | Sorted (Bytes.Bytes -> comparable)
 
 
 
--- PREDEFINED STRATEGIES
+-- PREDEFINED SORT ORDERS
 
 
 {-| RFC 8949 §4.2.1 Core Deterministic Encoding.
 
-Lexicographic byte order on encoded keys. Definite length.
+Lexicographic byte order on encoded keys.
 
 -}
-deterministic : Strategy
-deterministic =
-    { sortKeys = Just sortKeysByHex
-    , lengthMode = Definite
-    }
+deterministicSort : Sort String
+deterministicSort =
+    Sorted Hex.fromBytes
 
 
 {-| RFC 7049 / RFC 8949 §4.2.3 Canonical CBOR.
 
-Shorter keys first, then lexicographic within same length. Definite length.
+Shorter keys first, then lexicographic within same length.
+(Also used by CTAP2/FIDO canonical encoding.)
 
 -}
-canonical : Strategy
-canonical =
-    { sortKeys = Just sortKeysCanonicalByHex
-    , lengthMode = Definite
-    }
-
-
-{-| CTAP2 (FIDO) canonical encoding.
-
-Shorter keys first, then lexicographic within same length. Definite length.
-(Same ordering as canonical for CBOR-encoded keys.)
-
--}
-ctap2 : Strategy
-ctap2 =
-    { sortKeys = Just sortKeysCanonicalByHex
-    , lengthMode = Definite
-    }
-
-
-{-| Preserve insertion order. Definite length.
--}
-unsorted : Strategy
-unsorted =
-    { sortKeys = Nothing
-    , lengthMode = Definite
-    }
+canonicalSort : Sort ( Int, String )
+canonicalSort =
+    Sorted (\bs -> ( Bytes.width bs, Hex.fromBytes bs ))
 
 
 
 -- RUNNING
 
 
-{-| Apply a strategy to an encoder and produce CBOR bytes.
+{-| Produce CBOR bytes from an encoder.
 -}
-encode : Strategy -> Encoder -> Bytes.Bytes
-encode strategy encoder =
-    BE.encode (applyStrategy strategy encoder)
-
-
-applyStrategy : Strategy -> Encoder -> BE.Encoder
-applyStrategy strategy encoder =
-    case encoder of
-        Encoder enc ->
-            enc strategy
-
-        Direct be ->
-            be
-
-
-allDirect : List Encoder -> Bool
-allDirect encoders =
-    case encoders of
-        [] ->
-            True
-
-        (Direct _) :: rest ->
-            allDirect rest
-
-        (Encoder _) :: _ ->
-            False
-
-
-allDirectPairs : List ( Encoder, Encoder ) -> Bool
-allDirectPairs pairs =
-    case pairs of
-        [] ->
-            True
-
-        ( Direct _, Direct _ ) :: rest ->
-            allDirectPairs rest
-
-        _ ->
-            False
-
-
-unwrapDirect : Encoder -> BE.Encoder
-unwrapDirect encoder =
-    case encoder of
-        Direct be ->
-            be
-
-        Encoder _ ->
-            -- unreachable when guarded by allDirect
-            BE.sequence []
+encode : Encoder -> Bytes.Bytes
+encode (Encoder be) =
+    BE.encode be
 
 
 
@@ -211,14 +138,14 @@ Handles both positive and negative values within Elm's safe integer range.
 -}
 int : Int -> Encoder
 int n =
-    Direct (encodeInt n)
+    Encoder (encodeInt n)
 
 
 {-| Encode a float using the shortest IEEE 754 form that preserves the value.
 -}
 float : Float -> Encoder
 float f =
-    Direct (encodeFloat f)
+    Encoder (encodeFloat f)
 
 
 {-| Encode a boolean.
@@ -226,24 +153,24 @@ float f =
 bool : Bool -> Encoder
 bool b =
     if b then
-        Direct (BE.unsignedInt8 0xF5)
+        Encoder (BE.unsignedInt8 0xF5)
 
     else
-        Direct (BE.unsignedInt8 0xF4)
+        Encoder (BE.unsignedInt8 0xF4)
 
 
 {-| Encode a CBOR null.
 -}
 null : Encoder
 null =
-    Direct (BE.unsignedInt8 0xF6)
+    Encoder (BE.unsignedInt8 0xF6)
 
 
 {-| Encode a CBOR undefined.
 -}
 undefined : Encoder
 undefined =
-    Direct (BE.unsignedInt8 0xF7)
+    Encoder (BE.unsignedInt8 0xF7)
 
 
 {-| Encode a UTF-8 text string (major type 3).
@@ -255,7 +182,7 @@ string s =
         len =
             BE.getStringWidth s
     in
-    Direct
+    Encoder
         (BE.sequence
             [ encodeHeader 3 len
             , BE.string s
@@ -267,7 +194,7 @@ string s =
 -}
 bytes : Bytes.Bytes -> Encoder
 bytes bs =
-    Direct
+    Encoder
         (BE.sequence
             [ encodeHeader 2 (Bytes.width bs)
             , BE.bytes bs
@@ -280,10 +207,10 @@ bytes bs =
 simple : Int -> Encoder
 simple n =
     if n < 24 then
-        Direct (BE.unsignedInt8 (0xE0 + n))
+        Encoder (BE.unsignedInt8 (0xE0 + n))
 
     else
-        Direct
+        Encoder
             (BE.sequence
                 [ BE.unsignedInt8 0xF8
                 , BE.unsignedInt8 n
@@ -295,7 +222,7 @@ simple n =
 -- EXPLICIT WIDTH
 
 
-{-| Encode an integer with a specific wire width. Ignores strategy.
+{-| Encode an integer with a specific wire width.
 
 The value is encoded in the given width regardless of whether a shorter
 encoding exists. Useful for lossless round-tripping.
@@ -303,14 +230,14 @@ encoding exists. Useful for lossless round-tripping.
 -}
 intWithWidth : IntWidth -> Int -> Encoder
 intWithWidth width n =
-    Direct (encodeIntWithWidth width n)
+    Encoder (encodeIntWithWidth width n)
 
 
-{-| Encode a float with a specific IEEE 754 width. Ignores strategy.
+{-| Encode a float with a specific IEEE 754 width.
 -}
 floatWithWidth : FloatWidth -> Float -> Encoder
 floatWithWidth width f =
-    Direct
+    Encoder
         (case width of
             FW16 ->
                 BE.sequence
@@ -340,7 +267,7 @@ floatWithWidth width f =
 -}
 stringChunked : List String -> Encoder
 stringChunked chunks =
-    Direct
+    Encoder
         (BE.sequence
             [ BE.unsignedInt8 0x7F
             , BE.sequence (List.map encodeStringChunk chunks)
@@ -366,7 +293,7 @@ encodeStringChunk s =
 -}
 bytesChunked : List Bytes.Bytes -> Encoder
 bytesChunked chunks =
-    Direct
+    Encoder
         (BE.sequence
             [ BE.unsignedInt8 0x5F
             , BE.sequence (List.map encodeByteChunk chunks)
@@ -388,139 +315,84 @@ encodeByteChunk bs =
 
 
 {-| Encode a CBOR array (major type 4).
-
-The strategy determines whether definite or indefinite length encoding is used.
-
 -}
-array : List Encoder -> Encoder
-array items =
+array : Length -> List Encoder -> Encoder
+array len items =
     let
-        arraySequence : List BE.Encoder -> Strategy -> BE.Encoder
-        arraySequence itemsEncoders strategy =
-            case strategy.lengthMode of
-                Definite ->
-                    BE.sequence (encodeHeader 4 (List.length items) :: itemsEncoders)
-
-                Indefinite ->
-                    BE.sequence
-                        [ BE.unsignedInt8 0x9F
-                        , BE.sequence itemsEncoders
-                        , BE.unsignedInt8 0xFF
-                        ]
+        inner : List BE.Encoder
+        inner =
+            List.map unwrap items
     in
-    if allDirect items then
-        Encoder (arraySequence (List.map unwrapDirect items))
+    case len of
+        Definite ->
+            Encoder (BE.sequence (encodeHeader 4 (List.length items) :: inner))
 
-    else
-        Encoder (\strategy -> arraySequence (List.map (applyStrategy strategy) items) strategy)
+        Indefinite ->
+            Encoder
+                (BE.sequence
+                    [ BE.unsignedInt8 0x9F
+                    , BE.sequence inner
+                    , BE.unsignedInt8 0xFF
+                    ]
+                )
 
 
 {-| Encode a CBOR map (major type 5).
-
-The strategy determines key ordering and length mode.
-
 -}
-map : List ( Encoder, Encoder ) -> Encoder
-map entries =
+map : Sort comparable -> Length -> List ( Encoder, Encoder ) -> Encoder
+map sort len entries =
     let
-        sortAndEncode : (List ( Bytes.Bytes, BE.Encoder ) -> List ( Bytes.Bytes, BE.Encoder )) -> Strategy -> BE.Encoder
-        sortAndEncode sortFn strategy =
-            let
-                sorted : List ( Bytes.Bytes, BE.Encoder )
-                sorted =
-                    sortFn encodedEntries
-
-                encodedEntries : List ( Bytes.Bytes, BE.Encoder )
-                encodedEntries =
+        flatEntries : List BE.Encoder
+        flatEntries =
+            case sort of
+                Unsorted ->
                     List.map
-                        (\( keyEnc, valEnc ) ->
-                            let
-                                keyBytes : Bytes.Bytes
-                                keyBytes =
-                                    BE.encode (applyStrategy strategy keyEnc)
-                            in
-                            ( keyBytes, BE.sequence [ BE.bytes keyBytes, applyStrategy strategy valEnc ] )
-                        )
+                        (\( Encoder k, Encoder v ) -> BE.sequence [ k, v ])
                         entries
-            in
-            mapSequence (List.map Tuple.second sorted) strategy
 
-        mapSequence : List BE.Encoder -> Strategy -> BE.Encoder
-        mapSequence entryEncoders strategy =
-            case strategy.lengthMode of
-                Definite ->
-                    BE.sequence (encodeHeader 5 (List.length entries) :: entryEncoders)
-
-                Indefinite ->
-                    BE.sequence
-                        [ BE.unsignedInt8 0xBF
-                        , BE.sequence entryEncoders
-                        , BE.unsignedInt8 0xFF
-                        ]
-    in
-    if allDirectPairs entries then
-        let
-            preBuilt : List BE.Encoder
-            preBuilt =
-                List.map
-                    (\( keyEnc, valEnc ) ->
-                        BE.sequence [ unwrapDirect keyEnc, unwrapDirect valEnc ]
-                    )
+                Sorted toComparable ->
                     entries
-        in
-        Encoder
-            (\strategy ->
-                case strategy.sortKeys of
-                    Nothing ->
-                        mapSequence preBuilt strategy
-
-                    Just sortFn ->
-                        sortAndEncode sortFn strategy
-            )
-
-    else
-        Encoder
-            (\strategy ->
-                case strategy.sortKeys of
-                    Nothing ->
-                        mapSequence
-                            (List.map
-                                (\( keyEnc, valEnc ) ->
-                                    BE.sequence
-                                        [ applyStrategy strategy keyEnc
-                                        , applyStrategy strategy valEnc
-                                        ]
-                                )
-                                entries
+                        |> List.map
+                            (\( Encoder k, Encoder v ) ->
+                                let
+                                    keyBytes : Bytes.Bytes
+                                    keyBytes =
+                                        BE.encode k
+                                in
+                                ( toComparable keyBytes, BE.sequence [ BE.bytes keyBytes, v ] )
                             )
-                            strategy
+                        |> List.sortBy Tuple.first
+                        |> List.map Tuple.second
+    in
+    case len of
+        Definite ->
+            let
+                count : Int
+                count =
+                    List.length entries
+            in
+            Encoder (BE.sequence (encodeHeader 5 count :: flatEntries))
 
-                    Just sortFn ->
-                        sortAndEncode sortFn strategy
-            )
+        Indefinite ->
+            Encoder
+                (BE.sequence
+                    [ BE.unsignedInt8 0xBF
+                    , BE.sequence flatEntries
+                    , BE.unsignedInt8 0xFF
+                    ]
+                )
 
 
 {-| Encode a CBOR semantic tag (major type 6).
 -}
 tag : Tag -> Encoder -> Encoder
-tag t enclosed =
-    case enclosed of
-        Direct be ->
-            Direct
-                (BE.sequence
-                    [ encodeHeader 6 (tagToInt t)
-                    , be
-                    ]
-                )
-
-        Encoder enc ->
-            Encoder
-                (\strategy ->
-                    BE.sequence
-                        [ encodeHeader 6 (tagToInt t)
-                        , enc strategy
-                        ]
-                )
+tag t (Encoder be) =
+    Encoder
+        (BE.sequence
+            [ encodeHeader 6 (tagToInt t)
+            , be
+            ]
+        )
 
 
 {-| Encode a keyed record as a CBOR map with a shared key encoder.
@@ -529,8 +401,8 @@ tag t enclosed =
 "field absent" from "field is null."
 
 -}
-keyedRecord : (k -> Encoder) -> List ( k, Maybe Encoder ) -> Encoder
-keyedRecord keyEncoder entries =
+keyedRecord : Sort comparable -> Length -> (k -> Encoder) -> List ( k, Maybe Encoder ) -> Encoder
+keyedRecord sort len keyEncoder entries =
     let
         presentEntries : List ( Encoder, Encoder )
         presentEntries =
@@ -545,14 +417,14 @@ keyedRecord keyEncoder entries =
                 )
                 entries
     in
-    map presentEntries
+    map sort len presentEntries
 
 
 {-| Encode a list of items using the same element encoder.
 -}
-list : (a -> Encoder) -> List a -> Encoder
-list encodeElement items =
-    array (List.map encodeElement items)
+list : Length -> (a -> Encoder) -> List a -> Encoder
+list len encodeElement items =
+    array len (List.map encodeElement items)
 
 
 {-| Concatenate multiple CBOR items without a wrapping array.
@@ -562,35 +434,37 @@ Produces a CBOR Sequence (RFC 8742).
 -}
 sequence : List Encoder -> Encoder
 sequence encoders =
-    if allDirect encoders then
-        Direct (BE.sequence (List.map unwrapDirect encoders))
-
-    else
-        Encoder
-            (\strategy ->
-                BE.sequence (List.map (applyStrategy strategy) encoders)
-            )
+    Encoder (BE.sequence (List.map unwrap encoders))
 
 
 
 -- ESCAPE HATCHES
 
 
-{-| Encode a `CborItem` losslessly. Ignores strategy entirely.
+{-| Encode a `CborItem` losslessly.
 -}
 item : CborItem -> Encoder
 item cborItem =
-    Direct (encodeItem cborItem)
+    Encoder (encodeItem cborItem)
 
 
-{-| Inject pre-encoded CBOR bytes without validation. Ignores strategy.
+{-| Inject pre-encoded CBOR bytes without validation.
 
 If the bytes are not valid CBOR, the output is malformed.
 
 -}
 rawUnsafe : Bytes.Bytes -> Encoder
 rawUnsafe bs =
-    Direct (BE.bytes bs)
+    Encoder (BE.bytes bs)
+
+
+
+-- INTERNAL
+
+
+unwrap : Encoder -> BE.Encoder
+unwrap (Encoder be) =
+    be
 
 
 
@@ -947,23 +821,3 @@ encodeItem cborItem =
                     [ BE.unsignedInt8 0xF8
                     , BE.unsignedInt8 n
                     ]
-
-
-
--- INTERNAL: KEY SORTING
-
-
-sortKeysByHex : List ( Bytes.Bytes, BE.Encoder ) -> List ( Bytes.Bytes, BE.Encoder )
-sortKeysByHex entries =
-    entries
-        |> List.map (\( bs, enc ) -> ( Hex.fromBytes bs, ( bs, enc ) ))
-        |> List.sortBy Tuple.first
-        |> List.map Tuple.second
-
-
-sortKeysCanonicalByHex : List ( Bytes.Bytes, BE.Encoder ) -> List ( Bytes.Bytes, BE.Encoder )
-sortKeysCanonicalByHex entries =
-    entries
-        |> List.map (\( bs, enc ) -> ( ( Bytes.width bs, Hex.fromBytes bs ), ( bs, enc ) ))
-        |> List.sortBy Tuple.first
-        |> List.map Tuple.second

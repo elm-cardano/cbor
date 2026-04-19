@@ -10,11 +10,11 @@ import Hex
 import Test exposing (Test, describe, test)
 
 
-{-| Helper: encode with deterministic strategy and return hex string.
+{-| Helper: encode and return hex string.
 -}
 encodeToHex : CE.Encoder -> String
 encodeToHex encoder =
-    Hex.fromBytes (CE.encode CE.deterministic encoder)
+    Hex.fromBytes (CE.encode encoder)
 
 
 {-| Helper: decode from hex using a given CborDecoder.
@@ -22,13 +22,6 @@ encodeToHex encoder =
 decodeFromHex : CD.CborDecoder ctx a -> String -> Result (BD.Error ctx CD.DecodeError) a
 decodeFromHex decoder hex =
     CD.decode decoder (Hex.toBytesUnchecked hex)
-
-
-{-| Helper: encode with indefinite-length strategy and return hex string.
--}
-encodeToHexIndefinite : CE.Encoder -> String
-encodeToHexIndefinite encoder =
-    Hex.fromBytes (CE.encode { sortKeys = Nothing, lengthMode = Indefinite } encoder)
 
 
 {-| Helper: verify item decode -> re-encode round-trip preserves bytes.
@@ -39,7 +32,7 @@ itemRoundTrip hex =
         \_ ->
             case decodeFromHex CD.item hex of
                 Ok cborItem ->
-                    Hex.fromBytes (CE.encode CE.deterministic (CE.item cborItem))
+                    Hex.fromBytes (CE.encode (CE.item cborItem))
                         |> Expect.equal hex
 
                 Err err ->
@@ -74,7 +67,7 @@ suite =
         , roundTripTests
         , recordBuilderTests
         , keyedRecordBuilderTests
-        , strategyTests
+        , sortTests
         , itemDecoderTests
         , diagnosticTests
         , bigIntTests
@@ -458,18 +451,18 @@ encodeArrayTests : Test
 encodeArrayTests =
     describe "Cbor.Encode.array"
         [ test "empty array" <|
-            \_ -> encodeToHex (CE.array []) |> Expect.equal "80"
+            \_ -> encodeToHex (CE.array Definite []) |> Expect.equal "80"
         , test "[1, 2, 3]" <|
             \_ ->
-                encodeToHex (CE.array [ CE.int 1, CE.int 2, CE.int 3 ])
+                encodeToHex (CE.array Definite [ CE.int 1, CE.int 2, CE.int 3 ])
                     |> Expect.equal "83010203"
         , test "nested [1, [2, 3], [4, 5]]" <|
             \_ ->
                 encodeToHex
-                    (CE.array
+                    (CE.array Definite
                         [ CE.int 1
-                        , CE.array [ CE.int 2, CE.int 3 ]
-                        , CE.array [ CE.int 4, CE.int 5 ]
+                        , CE.array Definite [ CE.int 2, CE.int 3 ]
+                        , CE.array Definite [ CE.int 4, CE.int 5 ]
                         ]
                     )
                     |> Expect.equal "8301820203820405"
@@ -480,16 +473,16 @@ encodeArrayTests =
                     items =
                         List.range 1 25 |> List.map CE.int
                 in
-                encodeToHex (CE.array items)
+                encodeToHex (CE.array Definite items)
                     |> String.left 4
                     |> Expect.equal "9819"
         , test "indefinite array" <|
             \_ ->
-                encodeToHexIndefinite (CE.array [ CE.int 1, CE.int 2, CE.int 3 ])
+                encodeToHex (CE.array Indefinite [ CE.int 1, CE.int 2, CE.int 3 ])
                     |> Expect.equal "9f010203ff"
         , test "empty indefinite array" <|
             \_ ->
-                encodeToHexIndefinite (CE.array [])
+                encodeToHex (CE.array Indefinite [])
                     |> Expect.equal "9fff"
         ]
 
@@ -533,11 +526,12 @@ encodeMapTests : Test
 encodeMapTests =
     describe "Cbor.Encode.map"
         [ test "empty map" <|
-            \_ -> encodeToHex (CE.map []) |> Expect.equal "a0"
+            \_ -> encodeToHex (CE.map CE.Unsorted Definite []) |> Expect.equal "a0"
         , test "{1: 2, 3: 4}" <|
             \_ ->
                 encodeToHex
-                    (CE.map
+                    (CE.map CE.Unsorted
+                        Definite
                         [ ( CE.int 1, CE.int 2 )
                         , ( CE.int 3, CE.int 4 )
                         ]
@@ -545,12 +539,15 @@ encodeMapTests =
                     |> Expect.equal "a201020304"
         , test "indefinite map" <|
             \_ ->
-                encodeToHexIndefinite
-                    (CE.map [ ( CE.int 1, CE.int 2 ), ( CE.int 3, CE.int 4 ) ])
+                encodeToHex
+                    (CE.map CE.Unsorted
+                        Indefinite
+                        [ ( CE.int 1, CE.int 2 ), ( CE.int 3, CE.int 4 ) ]
+                    )
                     |> Expect.equal "bf01020304ff"
         , test "empty indefinite map" <|
             \_ ->
-                encodeToHexIndefinite (CE.map [])
+                encodeToHex (CE.map CE.Unsorted Indefinite [])
                     |> Expect.equal "bfff"
         ]
 
@@ -657,38 +654,39 @@ roundTripTests =
             \_ -> roundTripInt -1000
         , test "bool true" <|
             \_ ->
-                CE.encode CE.deterministic (CE.bool True)
+                CE.encode (CE.bool True)
                     |> CD.decode CD.bool
                     |> Expect.equal (Ok True)
         , test "bool false" <|
             \_ ->
-                CE.encode CE.deterministic (CE.bool False)
+                CE.encode (CE.bool False)
                     |> CD.decode CD.bool
                     |> Expect.equal (Ok False)
         , test "string round-trip" <|
             \_ ->
-                CE.encode CE.deterministic (CE.string "hello")
+                CE.encode (CE.string "hello")
                     |> CD.decode CD.string
                     |> Expect.equal (Ok "hello")
         , test "string with unicode" <|
             \_ ->
-                CE.encode CE.deterministic (CE.string "日本語")
+                CE.encode (CE.string "日本語")
                     |> CD.decode CD.string
                     |> Expect.equal (Ok "日本語")
         , test "empty array" <|
             \_ ->
-                CE.encode CE.deterministic (CE.array [])
+                CE.encode (CE.array Definite [])
                     |> CD.decode (CD.array CD.int)
                     |> Expect.equal (Ok [])
         , test "array of ints" <|
             \_ ->
-                CE.encode CE.deterministic (CE.list CE.int [ 1, 2, 3, 4, 5 ])
+                CE.encode (CE.list Definite CE.int [ 1, 2, 3, 4, 5 ])
                     |> CD.decode (CD.array CD.int)
                     |> Expect.equal (Ok [ 1, 2, 3, 4, 5 ])
         , test "map of int->string" <|
             \_ ->
-                CE.encode CE.deterministic
-                    (CE.map
+                CE.encode
+                    (CE.map CE.Unsorted
+                        Definite
                         [ ( CE.int 1, CE.string "one" )
                         , ( CE.int 2, CE.string "two" )
                         ]
@@ -697,18 +695,18 @@ roundTripTests =
                     |> Expect.equal (Ok [ ( 1, "one" ), ( 2, "two" ) ])
         , test "null round-trip" <|
             \_ ->
-                CE.encode CE.deterministic CE.null
+                CE.encode CE.null
                     |> CD.decode (CD.null ())
                     |> Expect.equal (Ok ())
         , test "Infinity round-trip" <|
             \_ ->
-                CE.encode CE.deterministic (CE.float (1 / 0))
+                CE.encode (CE.float (1 / 0))
                     |> CD.decode CD.float
                     |> Result.map isInfinite
                     |> Expect.equal (Ok True)
         , test "NaN round-trip" <|
             \_ ->
-                CE.encode CE.deterministic (CE.float (0 / 0))
+                CE.encode (CE.float (0 / 0))
                     |> CD.decode CD.float
                     |> Result.map isNaN
                     |> Expect.equal (Ok True)
@@ -717,7 +715,7 @@ roundTripTests =
 
 roundTripInt : Int -> Expect.Expectation
 roundTripInt n =
-    CE.encode CE.deterministic (CE.int n)
+    CE.encode (CE.int n)
         |> CD.decode CD.int
         |> Expect.equal (Ok n)
 
@@ -747,8 +745,8 @@ recordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.array [ CE.float 1.5, CE.float 2.5 ])
+                        CE.encode
+                            (CE.array Definite [ CE.float 1.5, CE.float 2.5 ])
 
                     decoder : CD.CborDecoder () Point
                     decoder =
@@ -764,8 +762,8 @@ recordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.array [ CE.float 1.0, CE.float 2.0, CE.float 3.0 ])
+                        CE.encode
+                            (CE.array Definite [ CE.float 1.0, CE.float 2.0, CE.float 3.0 ])
 
                     decoder : CD.CborDecoder () Point3D
                     decoder =
@@ -782,8 +780,8 @@ recordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.array [ CE.float 1.0, CE.float 2.0 ])
+                        CE.encode
+                            (CE.array Definite [ CE.float 1.0, CE.float 2.0 ])
 
                     decoder : CD.CborDecoder () Point3D
                     decoder =
@@ -800,8 +798,8 @@ recordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.array [ CE.float 1.0, CE.float 2.0, CE.float 3.0, CE.float 4.0 ])
+                        CE.encode
+                            (CE.array Definite [ CE.float 1.0, CE.float 2.0, CE.float 3.0, CE.float 4.0 ])
 
                     decoder : CD.CborDecoder () Point
                     decoder =
@@ -817,8 +815,8 @@ recordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.array [ CE.float 1.0 ])
+                        CE.encode
+                            (CE.array Definite [ CE.float 1.0 ])
 
                     decoder : CD.CborDecoder () Point
                     decoder =
@@ -835,8 +833,8 @@ recordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.array [ CE.string "localhost", CE.int 8080 ])
+                        CE.encode
+                            (CE.array Definite [ CE.string "localhost", CE.int 8080 ])
 
                     decoder : CD.CborDecoder () Config
                     decoder =
@@ -854,8 +852,8 @@ recordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.array [ CE.string "localhost", CE.int 8080, CE.bool True ])
+                        CE.encode
+                            (CE.array Definite [ CE.string "localhost", CE.int 8080, CE.bool True ])
 
                     decoder : CD.CborDecoder () Config
                     decoder =
@@ -899,8 +897,9 @@ keyedRecordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
                                 [ ( CE.int 0, CE.string "Alice" )
                                 , ( CE.int 1, CE.int 30 )
                                 ]
@@ -920,8 +919,9 @@ keyedRecordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
                                 [ ( CE.int 0, CE.string "Bob" )
                                 , ( CE.int 1, CE.int 25 )
                                 , ( CE.int 2, CE.string "bob@example.com" )
@@ -943,8 +943,9 @@ keyedRecordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
                                 [ ( CE.int 0, CE.string "Charlie" )
                                 , ( CE.int 1, CE.int 35 )
                                 ]
@@ -965,8 +966,9 @@ keyedRecordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
                                 [ ( CE.int 0, CE.string "Alice" )
                                 , ( CE.int 1, CE.int 30 )
                                 , ( CE.int 3, CE.bool True )
@@ -989,8 +991,9 @@ keyedRecordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
                                 [ ( CE.int 0, CE.string "Alice" )
                                 , ( CE.int 1, CE.int 30 )
                                 ]
@@ -1012,8 +1015,9 @@ keyedRecordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
                                 [ ( CE.int 0, CE.string "Alice" )
                                 , ( CE.int 1, CE.int 30 )
                                 , ( CE.int 99, CE.string "extra" )
@@ -1034,8 +1038,9 @@ keyedRecordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
                                 [ ( CE.int 0, CE.string "Alice" )
                                 , ( CE.int 5, CE.int 30 )
                                 ]
@@ -1056,8 +1061,9 @@ keyedRecordBuilderTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
                                 [ ( CE.int 0, CE.string "Alice" )
                                 , ( CE.int 1, CE.int 30 )
                                 , ( CE.int 3, CE.bool True )
@@ -1079,13 +1085,13 @@ keyedRecordBuilderTests =
 
 
 
--- STRATEGY TESTS
+-- SORT TESTS
 
 
-strategyTests : Test
-strategyTests =
-    describe "Encoding strategies"
-        [ test "deterministic sorts keys lexicographically" <|
+sortTests : Test
+sortTests =
+    describe "Sort and length"
+        [ test "deterministicSort sorts keys lexicographically" <|
             \_ ->
                 -- Keys: int 10 (0x0a) and int 1 (0x01)
                 -- Encoded key 1 = 0x01, key 10 = 0x0a
@@ -1093,8 +1099,9 @@ strategyTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.deterministicSort
+                                Definite
                                 [ ( CE.int 10, CE.string "ten" )
                                 , ( CE.int 1, CE.string "one" )
                                 ]
@@ -1110,8 +1117,9 @@ strategyTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.unsorted
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
                                 [ ( CE.int 10, CE.string "ten" )
                                 , ( CE.int 1, CE.string "one" )
                                 ]
@@ -1122,18 +1130,29 @@ strategyTests =
                     |> Expect.equal "a20a63"
 
         -- a2 = map(2), 0a = key 10, 63 = text(3)
-        , test "keyedRecord with strategy" <|
+        , test "keyedRecord with deterministicSort matches unsorted for ordered keys" <|
             \_ ->
                 let
-                    encoder : CE.Encoder
-                    encoder =
-                        CE.keyedRecord CE.int
+                    unsortedEncoder : CE.Encoder
+                    unsortedEncoder =
+                        CE.keyedRecord CE.Unsorted
+                            Definite
+                            CE.int
                             [ ( 0, Just (CE.string "Alice") )
                             , ( 1, Just (CE.int 30) )
                             ]
+
+                    deterministicEncoder : CE.Encoder
+                    deterministicEncoder =
+                        CE.keyedRecord CE.deterministicSort
+                            Definite
+                            CE.int
+                            [ ( 1, Just (CE.int 30) )
+                            , ( 0, Just (CE.string "Alice") )
+                            ]
                 in
-                Hex.fromBytes (CE.encode CE.deterministic encoder)
-                    |> Expect.equal (Hex.fromBytes (CE.encode CE.unsorted encoder))
+                Hex.fromBytes (CE.encode deterministicEncoder)
+                    |> Expect.equal (Hex.fromBytes (CE.encode unsortedEncoder))
 
         -- keys 0, 1 are already in order
         , test "keyedRecord omits Nothing entries" <|
@@ -1141,17 +1160,19 @@ strategyTests =
                 let
                     encoder : CE.Encoder
                     encoder =
-                        CE.keyedRecord CE.int
+                        CE.keyedRecord CE.Unsorted
+                            Definite
+                            CE.int
                             [ ( 0, Just (CE.string "Alice") )
                             , ( 1, Nothing )
                             , ( 2, Just (CE.int 30) )
                             ]
                 in
                 -- Should produce a 2-entry map (key 0 and key 2), not 3
-                Hex.fromBytes (CE.encode CE.deterministic encoder)
+                Hex.fromBytes (CE.encode encoder)
                     |> String.left 2
                     |> Expect.equal "a2"
-        , test "deterministic: int 256 before string empty (lexicographic)" <|
+        , test "deterministicSort: int 256 before string empty (lexicographic)" <|
             \_ ->
                 -- Key A: string "" -> 0x60 (1 byte)
                 -- Key B: int 256 -> 0x190100 (3 bytes)
@@ -1163,9 +1184,9 @@ strategyTests =
                         , ( CE.int 256, CE.int 2 )
                         ]
                 in
-                Hex.fromBytes (CE.encode CE.deterministic (CE.map entries))
+                Hex.fromBytes (CE.encode (CE.map CE.deterministicSort Definite entries))
                     |> Expect.equal "a2190100026001"
-        , test "canonical: string empty before int 256 (length-first)" <|
+        , test "canonicalSort: string empty before int 256 (length-first)" <|
             \_ ->
                 -- Canonical: 1 byte < 3 bytes -> string "" first
                 let
@@ -1175,20 +1196,14 @@ strategyTests =
                         , ( CE.int 256, CE.int 2 )
                         ]
                 in
-                Hex.fromBytes (CE.encode CE.canonical (CE.map entries))
+                Hex.fromBytes (CE.encode (CE.map CE.canonicalSort Definite entries))
                     |> Expect.equal "a2600119010002"
         , test "indefinite map with sorted keys" <|
             \_ ->
-                let
-                    strategy : CE.Strategy
-                    strategy =
-                        { sortKeys = CE.deterministic.sortKeys
-                        , lengthMode = Indefinite
-                        }
-                in
                 Hex.fromBytes
-                    (CE.encode strategy
-                        (CE.map
+                    (CE.encode
+                        (CE.map CE.deterministicSort
+                            Indefinite
                             [ ( CE.int 10, CE.int 20 )
                             , ( CE.int 1, CE.int 2 )
                             ]
@@ -1360,14 +1375,14 @@ itemDecoderTests =
         , test "encode CborInt64 positive" <|
             \_ ->
                 Hex.fromBytes
-                    (CE.encode CE.deterministic
+                    (CE.encode
                         (CE.item (CborInt64 Positive (Hex.toBytesUnchecked "000000000000002a")))
                     )
                     |> Expect.equal "1b000000000000002a"
         , test "encode CborInt64 negative" <|
             \_ ->
                 Hex.fromBytes
-                    (CE.encode CE.deterministic
+                    (CE.encode
                         (CE.item (CborInt64 Negative (Hex.toBytesUnchecked "000000000000002a")))
                     )
                     |> Expect.equal "3b000000000000002a"
@@ -1407,7 +1422,7 @@ itemDecoderTests =
                 in
                 case decodeFromHex CD.item hex of
                     Ok cborItem ->
-                        Hex.fromBytes (CE.encode CE.deterministic (CE.item cborItem))
+                        Hex.fromBytes (CE.encode (CE.item cborItem))
                             |> Expect.equal hex
 
                     Err err ->
@@ -1607,8 +1622,9 @@ foldEntriesTests =
                 let
                     encoded : Bytes.Bytes
                     encoded =
-                        CE.encode CE.deterministic
-                            (CE.map
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
                                 [ ( CE.int 0, CE.string "Alice" )
                                 , ( CE.int 1, CE.int 30 )
                                 , ( CE.int 99, CE.string "extra" )
@@ -1676,10 +1692,10 @@ rawUnsafeTests =
             \_ ->
                 encodeToHex (CE.rawUnsafe (Hex.toBytesUnchecked "f97c00"))
                     |> Expect.equal "f97c00"
-        , test "rawUnsafe ignores strategy" <|
+        , test "rawUnsafe produces correct bytes" <|
             \_ ->
                 Hex.fromBytes
-                    (CE.encode CE.canonical
+                    (CE.encode
                         (CE.rawUnsafe (Hex.toBytesUnchecked "83010203"))
                     )
                     |> Expect.equal "83010203"
