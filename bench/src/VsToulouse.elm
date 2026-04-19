@@ -433,7 +433,7 @@ ecDecKR10 =
         |> CD.required 7 CD.int
         |> CD.required 8 CD.int
         |> CD.required 9 CD.int
-        |> CD.buildKeyedRecord
+        |> CD.buildKeyedRecord CD.IgnoreExtra
 
 
 tlDecKR10 : TD.Decoder R10

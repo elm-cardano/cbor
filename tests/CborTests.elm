@@ -928,7 +928,7 @@ keyedRecordBuilderTests =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
-                            |> CD.buildKeyedRecord
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Alice", age = 30 })
@@ -952,7 +952,7 @@ keyedRecordBuilderTests =
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
-                            |> CD.buildKeyedRecord
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Bob", age = 25, email = "bob@example.com" })
@@ -975,7 +975,7 @@ keyedRecordBuilderTests =
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
-                            |> CD.buildKeyedRecord
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Charlie", age = 35, email = "" })
@@ -1000,7 +1000,7 @@ keyedRecordBuilderTests =
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
                             |> CD.required 3 CD.bool
-                            |> CD.buildKeyedRecord
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Alice", age = 30, email = "", active = True })
@@ -1024,7 +1024,7 @@ keyedRecordBuilderTests =
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
                             |> CD.optional 3 CD.string ""
-                            |> CD.buildKeyedRecord
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Alice", age = 30, email = "", phone = "" })
@@ -1047,10 +1047,34 @@ keyedRecordBuilderTests =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
-                            |> CD.buildKeyedRecord
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { name = "Alice", age = 30 })
+        , test "extra trailing entries rejected with FailOnExtra" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 99, CE.string "extra" )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.keyedRecord CD.int Person
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.buildKeyedRecord CD.FailOnExtra
+                in
+                CD.decode decoder encoded
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
         , test "required key mismatch fails" <|
             \_ ->
                 let
@@ -1069,7 +1093,7 @@ keyedRecordBuilderTests =
                         CD.keyedRecord CD.int Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
-                            |> CD.buildKeyedRecord
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Result.toMaybe
@@ -1094,7 +1118,7 @@ keyedRecordBuilderTests =
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
-                            |> CD.buildKeyedRecord
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Result.toMaybe

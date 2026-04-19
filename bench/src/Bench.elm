@@ -486,7 +486,7 @@ decKR3Builder =
         |> CD.required 0 CD.int
         |> CD.required 1 CD.int
         |> CD.required 2 CD.int
-        |> CD.buildKeyedRecord
+        |> CD.buildKeyedRecord CD.IgnoreExtra
 
 
 decKR10Builder : CD.CborDecoder ctx R10
@@ -502,7 +502,7 @@ decKR10Builder =
         |> CD.required 7 CD.int
         |> CD.required 8 CD.int
         |> CD.required 9 CD.int
-        |> CD.buildKeyedRecord
+        |> CD.buildKeyedRecord CD.IgnoreExtra
 
 
 decFold : CD.CborDecoder ctx (List ( Int, Int ))

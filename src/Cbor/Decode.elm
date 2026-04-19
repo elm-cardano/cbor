@@ -26,7 +26,7 @@ Run them with `decode`, or convert to a `Bytes.Decoder.Decoder` with `toBD`.
         CD.keyedRecord CD.int Person
             |> CD.required 0 CD.string
             |> CD.required 1 CD.int
-            |> CD.buildKeyedRecord
+            |> CD.buildKeyedRecord CD.IgnoreExtra
 
     -- To run: CD.decode decodePerson someBytes
 
@@ -1392,7 +1392,7 @@ type alias KeyedState k a =
     keyedRecord int Person
         |> required 0 string
         |> required 1 int
-        |> buildKeyedRecord
+        |> buildKeyedRecord IgnoreExtra
 
 -}
 keyedRecord : CborDecoder ctx k -> a -> KeyedRecordBuilder ctx k a
@@ -1520,8 +1520,8 @@ Reads the map header, runs the builder pipeline, and verifies all
 entries were consumed.
 
 -}
-buildKeyedRecord : KeyedRecordBuilder ctx k a -> CborDecoder ctx a
-buildKeyedRecord (KeyedRecordBuilder _ decoder) =
+buildKeyedRecord : ExtraElements -> KeyedRecordBuilder ctx k a -> CborDecoder ctx a
+buildKeyedRecord extra (KeyedRecordBuilder _ decoder) =
     mapHeader
         |> andThen
             (\maybeN ->
@@ -1535,8 +1535,13 @@ buildKeyedRecord (KeyedRecordBuilder _ decoder) =
                                             BD.succeed state.value
 
                                         else if state.pendingKey == Nothing then
-                                            skipEntries state.remaining
-                                                |> BD.map (\_ -> state.value)
+                                            case extra of
+                                                IgnoreExtra ->
+                                                    skipEntries state.remaining
+                                                        |> BD.map (\_ -> state.value)
+
+                                                FailOnExtra ->
+                                                    BD.fail TooManyElements
 
                                         else
                                             BD.fail UnexpectedPendingKey
