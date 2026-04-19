@@ -426,7 +426,7 @@ decR3Builder =
         |> CD.element CD.int
         |> CD.element CD.int
         |> CD.element CD.int
-        |> CD.buildRecord
+        |> CD.buildRecord CD.IgnoreExtra
 
 
 decR3Manual : CD.CborDecoder ctx R3
@@ -454,7 +454,7 @@ decR10Builder =
         |> CD.element CD.int
         |> CD.element CD.int
         |> CD.element CD.int
-        |> CD.buildRecord
+        |> CD.buildRecord CD.IgnoreExtra
 
 
 decR10Manual : CD.CborDecoder ctx R10

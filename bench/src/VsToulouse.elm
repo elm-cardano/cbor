@@ -401,7 +401,7 @@ ecDecR10 =
         |> CD.element CD.int
         |> CD.element CD.int
         |> CD.element CD.int
-        |> CD.buildRecord
+        |> CD.buildRecord CD.IgnoreExtra
 
 
 tlDecR10 : TD.Decoder R10

@@ -5,7 +5,7 @@ module Cbor.Decode exposing
     , map, map2, andThen, oneOf, keep, ignore, loop, lazy
     , int, bigInt, float, bool, null, string, bytes
     , array, keyValue, field, foldEntries, tag
-    , RecordBuilder, record, element, optionalElement, buildRecord
+    , RecordBuilder, record, element, optionalElement, ExtraElements(..), buildRecord
     , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
     , arrayHeader, mapHeader
     , item
@@ -59,7 +59,7 @@ Run them with `decode`, or convert to a `Bytes.Decoder.Decoder` with `toBD`.
 
 ## Record Builder (CBOR arrays → Elm values)
 
-@docs RecordBuilder, record, element, optionalElement, buildRecord
+@docs RecordBuilder, record, element, optionalElement, ExtraElements, buildRecord
 
 
 ## Keyed Record Builder (CBOR maps → Elm values)
@@ -150,6 +150,7 @@ type DecodeError
     | IntegerOverflow
     | KeyMismatch
     | TooFewElements
+    | TooManyElements
     | UnexpectedPendingKey
     | IndefiniteLengthNotSupported
     | UnknownMajorType Int
@@ -180,6 +181,9 @@ errorToString err =
 
         TooFewElements ->
             "Array has fewer elements than expected"
+
+        TooManyElements ->
+            "Array has more elements than expected"
 
         UnexpectedPendingKey ->
             "Unexpected pending key at end of keyed record"
@@ -1208,7 +1212,7 @@ type RecordBuilder ctx a
     record Point
         |> element float
         |> element float
-        |> buildRecord
+        |> buildRecord IgnoreExtra
 
 -}
 record : a -> RecordBuilder ctx a
@@ -1292,14 +1296,25 @@ toCountedInner builder =
             inner
 
 
-{-| Finalize a record builder into a decoder.
+{-| What to do when the CBOR array has more elements than the builder expects.
 
-Reads the array header, runs the builder pipeline, and verifies all
-elements were consumed.
+  - `IgnoreExtra` — silently skip trailing elements (forward-compatible).
+  - `FailOnExtra` — fail with `TooManyElements` (strict validation).
 
 -}
-buildRecord : RecordBuilder ctx a -> CborDecoder ctx a
-buildRecord builder =
+type ExtraElements
+    = IgnoreExtra
+    | FailOnExtra
+
+
+{-| Finalize a record builder into a decoder.
+
+Reads the array header, runs the builder pipeline, and handles any
+extra elements according to the `ExtraElements` strategy.
+
+-}
+buildRecord : ExtraElements -> RecordBuilder ctx a -> CborDecoder ctx a
+buildRecord extra builder =
     case builder of
         SimpleBuilder expectedCount decoder ->
             arrayHeader
@@ -1314,8 +1329,13 @@ buildRecord builder =
                                     decoder
 
                                 else
-                                    decoder
-                                        |> ignore (fromBD (skipItems (n - expectedCount)))
+                                    case extra of
+                                        IgnoreExtra ->
+                                            decoder
+                                                |> ignore (fromBD (skipItems (n - expectedCount)))
+
+                                        FailOnExtra ->
+                                            fail TooManyElements
 
                             Nothing ->
                                 fail IndefiniteLengthNotSupported
@@ -1334,8 +1354,13 @@ buildRecord builder =
                                                 BD.succeed value
 
                                             else
-                                                skipItems rem
-                                                    |> BD.map (\_ -> value)
+                                                case extra of
+                                                    IgnoreExtra ->
+                                                        skipItems rem
+                                                            |> BD.map (\_ -> value)
+
+                                                    FailOnExtra ->
+                                                        BD.fail TooManyElements
                                         )
                                 )
 

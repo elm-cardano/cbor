@@ -753,7 +753,7 @@ recordBuilderTests =
                         CD.record Point
                             |> CD.element CD.float
                             |> CD.element CD.float
-                            |> CD.buildRecord
+                            |> CD.buildRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { x = 1.5, y = 2.5 })
@@ -771,7 +771,7 @@ recordBuilderTests =
                             |> CD.element CD.float
                             |> CD.element CD.float
                             |> CD.optionalElement CD.float 0.0
-                            |> CD.buildRecord
+                            |> CD.buildRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { x = 1.0, y = 2.0, z = 3.0 })
@@ -789,7 +789,7 @@ recordBuilderTests =
                             |> CD.element CD.float
                             |> CD.element CD.float
                             |> CD.optionalElement CD.float 0.0
-                            |> CD.buildRecord
+                            |> CD.buildRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { x = 1.0, y = 2.0, z = 0.0 })
@@ -806,10 +806,28 @@ recordBuilderTests =
                         CD.record Point
                             |> CD.element CD.float
                             |> CD.element CD.float
-                            |> CD.buildRecord
+                            |> CD.buildRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { x = 1.0, y = 2.0 })
+        , test "extra array elements rejected with FailOnExtra" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.array Definite [ CE.float 1.0, CE.float 2.0, CE.float 3.0, CE.float 4.0 ])
+
+                    decoder : CD.CborDecoder () Point
+                    decoder =
+                        CD.record Point
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.buildRecord CD.FailOnExtra
+                in
+                CD.decode decoder encoded
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
         , test "too few elements fails" <|
             \_ ->
                 let
@@ -823,7 +841,7 @@ recordBuilderTests =
                         CD.record Point
                             |> CD.element CD.float
                             |> CD.element CD.float
-                            |> CD.buildRecord
+                            |> CD.buildRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Result.toMaybe
@@ -843,7 +861,7 @@ recordBuilderTests =
                             |> CD.element CD.int
                             |> CD.optionalElement CD.bool False
                             |> CD.optionalElement CD.bool False
-                            |> CD.buildRecord
+                            |> CD.buildRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { host = "localhost", port_ = 8080, debug = False, verbose = False })
@@ -862,7 +880,7 @@ recordBuilderTests =
                             |> CD.element CD.int
                             |> CD.optionalElement CD.bool False
                             |> CD.optionalElement CD.bool False
-                            |> CD.buildRecord
+                            |> CD.buildRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { host = "localhost", port_ = 8080, debug = True, verbose = False })
