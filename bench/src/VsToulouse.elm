@@ -5,6 +5,8 @@ module VsToulouse exposing
     , enc_ec_tuple10, enc_tl_tuple10
     , enc_ec_keyed10, enc_tl_keyed10
     , enc_ec_nested100, enc_tl_nested100
+    , enc_ec_list100_mixed, enc_tl_list100_mixed
+    , enc_ec_map100_mixed, enc_tl_map100_mixed
     , dec_ec_array100, dec_tl_array100
     , dec_ec_map100, dec_tl_map100
     , dec_ec_record10, dec_tl_record10
@@ -79,6 +81,30 @@ elm-bench -f VsToulouse.enc_ec_nested100 -f VsToulouse.enc_tl_nested100 "()"
 ```
 
 @docs enc_ec_nested100, enc_tl_nested100
+
+
+# Encode list of 100 wrapped ints (non-Direct path)
+
+Each element is a 1-element CBOR array wrapping an int. The wrapper prevents
+the `allDirect` fast path, measuring the `Encoder` closure dispatch path.
+
+```sh
+elm-bench -f VsToulouse.enc_ec_list100_mixed -f VsToulouse.enc_tl_list100_mixed "()"
+```
+
+@docs enc_ec_list100_mixed, enc_tl_list100_mixed
+
+
+# Encode map of 100 wrapped int pairs (non-Direct path)
+
+Each value is a 1-element CBOR array wrapping an int. The wrapper prevents
+the `allDirectPairs` fast path, measuring the `Encoder` closure dispatch path.
+
+```sh
+elm-bench -f VsToulouse.enc_ec_map100_mixed -f VsToulouse.enc_tl_map100_mixed "()"
+```
+
+@docs enc_ec_map100_mixed, enc_tl_map100_mixed
 
 
 # Decode array of 100 ints
@@ -204,6 +230,26 @@ ecFloatEncoder =
 tlFloatEncoder : TE.Encoder
 tlFloatEncoder =
     TE.list TE.float float64Values
+
+
+ecListMixedEncoder : CE.Encoder
+ecListMixedEncoder =
+    CE.list (\i -> CE.array [ CE.int i ]) intRange100
+
+
+tlListMixedEncoder : TE.Encoder
+tlListMixedEncoder =
+    TE.list (\i -> TE.list TE.int [ i ]) intRange100
+
+
+ecMapMixedEncoder : CE.Encoder
+ecMapMixedEncoder =
+    CE.map (List.map (\( k, v ) -> ( CE.int k, CE.array [ CE.int v ] )) intPairs100)
+
+
+tlMapMixedEncoder : TE.Encoder
+tlMapMixedEncoder =
+    TE.associativeList TE.int (\v -> TE.list TE.int [ v ]) intPairs100
 
 
 
@@ -486,6 +532,42 @@ enc_ec_nested100 () =
 enc_tl_nested100 : () -> Bytes
 enc_tl_nested100 () =
     TE.encode (TE.list tlEncodeR3 r3List)
+
+
+
+-- ============================================================================
+-- 6b. ENCODE LIST OF 100 WRAPPED INTS (NON-DIRECT PATH)
+-- ============================================================================
+-- Each element is CE.array [CE.int i], which is an Encoder (not Direct).
+-- This prevents the allDirect fast path in the outer list/array.
+
+
+enc_ec_list100_mixed : () -> Bytes
+enc_ec_list100_mixed () =
+    CE.encode CE.unsorted ecListMixedEncoder
+
+
+enc_tl_list100_mixed : () -> Bytes
+enc_tl_list100_mixed () =
+    TE.encode tlListMixedEncoder
+
+
+
+-- ============================================================================
+-- 6c. ENCODE MAP OF 100 WRAPPED INT PAIRS (NON-DIRECT PATH)
+-- ============================================================================
+-- Each value is CE.array [CE.int v], which is an Encoder (not Direct).
+-- This prevents the allDirectPairs fast path in the outer map.
+
+
+enc_ec_map100_mixed : () -> Bytes
+enc_ec_map100_mixed () =
+    CE.encode CE.unsorted ecMapMixedEncoder
+
+
+enc_tl_map100_mixed : () -> Bytes
+enc_tl_map100_mixed () =
+    TE.encode tlMapMixedEncoder
 
 
 

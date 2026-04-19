@@ -230,6 +230,20 @@ delegates to `array` which checks every element.
 
 Backward-compatible: constructors are opaque.
 
+**Non-Direct path gap**: when elements are `Encoder` (not `Direct`), the fast
+path cannot trigger. Pre-built encoders with wrapped elements (e.g. each int
+inside a 1-element array) show the inherent strategy dispatch cost:
+
+| Benchmark | ec (ns/run) | tl (ns/run) | Delta |
+|---|---:|---:|---|
+| list of 100 wrapped ints | 8151 | 2244 | tl 72% faster |
+| map of 100 wrapped int pairs | 12187 | 4377 | tl 64% faster |
+
+This gap is the irreducible cost of the `Encoder (Strategy -> BE.Encoder)`
+architecture: at encode time, each `Encoder` child requires a pattern match +
+closure call + `lengthMode`/`sortKeys` check. Toulouse's pre-built
+`Bytes.Encode.Encoder` tree has zero encode-time overhead.
+
 
 ### Encoder micro-optimizations
 
