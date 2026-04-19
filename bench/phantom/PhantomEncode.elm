@@ -1,10 +1,17 @@
 module PhantomEncode exposing
     ( Encoder
+    , array
+    , bool
+    , definite
     , encode
-    , int, string, bool
-    , array, map, list, sequence
-    , unsorted, sorted
-    , definite, indefinite
+    , indefinite
+    , int
+    , list
+    , map
+    , sequence
+    , sorted
+    , string
+    , unsorted
     )
 
 {-| Experimental CBOR encoder using phantom extensible records
@@ -271,7 +278,8 @@ encode enc =
 -- INTERNAL
 
 
-{-| Extract the inner BE.Encoder. Safe when called on Resolved values. -}
+{-| Extract the inner BE.Encoder. Safe when called on Resolved values.
+-}
 unwrap : Encoder a -> BE.Encoder
 unwrap enc =
     case enc of

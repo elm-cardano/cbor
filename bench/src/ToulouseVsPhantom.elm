@@ -278,6 +278,7 @@ enc_ar_list100 () =
     AE.encode (arListEncoder intRange100)
 
 
+
 -- ============================================================================
 -- 2. ENCODE MAP OF 100 INT PAIRS (pre-built)
 -- ============================================================================
@@ -476,7 +477,8 @@ enc_ar_keyed10 () =
 
 arKeyed10Encoder : R10 -> AE.Encoder
 arKeyed10Encoder r =
-    AE.map AE.Unsorted AE.Definite
+    AE.map AE.Unsorted
+        AE.Definite
         [ ( AE.int 0, AE.int r.a )
         , ( AE.int 1, AE.int r.b )
         , ( AE.int 2, AE.int r.c )
@@ -567,6 +569,7 @@ enc_pt_list100_mixed () =
 enc_ar_list100_mixed : () -> Bytes
 enc_ar_list100_mixed () =
     AE.encode (arListMixedEncoder intRange100Mixed)
+
 
 
 -- ============================================================================

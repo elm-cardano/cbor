@@ -1,9 +1,15 @@
 module ArgEncode exposing
     ( Encoder
+    , Length(..)
+    , Sort(..)
+    , array
+    , bool
     , encode
-    , int, string, bool
-    , Length(..), Sort(..)
-    , array, map, list, sequence
+    , int
+    , list
+    , map
+    , sequence
+    , string
     )
 
 {-| CBOR encoder where containers take strategy arguments directly.

@@ -1,10 +1,17 @@
 module PhantomTreeEncode exposing
     ( Encoder
+    , array
+    , bool
+    , definite
     , encode
-    , int, string, bool
-    , array, map, list, sequence
-    , unsorted, sorted
-    , definite, indefinite
+    , indefinite
+    , int
+    , list
+    , map
+    , sequence
+    , sorted
+    , string
+    , unsorted
     )
 
 {-| Experimental CBOR encoder using phantom extensible records
