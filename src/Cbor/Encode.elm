@@ -314,43 +314,69 @@ encodeByteChunk bs =
 -- COLLECTIONS
 
 
+{-| Encode a list of items using the same element encoder.
+-}
+list : Length -> (a -> Encoder) -> List a -> Encoder
+list len encodeElement items =
+    let
+        { count, inner } =
+            List.foldr
+                (\x acc ->
+                    let
+                        (Encoder be) =
+                            encodeElement x
+                    in
+                    { count = acc.count + 1
+                    , inner = be :: acc.inner
+                    }
+                )
+                { count = 0, inner = [] }
+                items
+    in
+    buildArray4 len count inner
+
+
 {-| Encode a CBOR array (major type 4).
 -}
 array : Length -> List Encoder -> Encoder
 array len items =
     let
-        inner : List BE.Encoder
-        inner =
-            List.map unwrap items
-    in
-    case len of
-        Definite ->
-            Encoder (BE.sequence (encodeHeader 4 (List.length items) :: inner))
-
-        Indefinite ->
-            Encoder
-                (BE.sequence
-                    [ BE.unsignedInt8 0x9F
-                    , BE.sequence inner
-                    , BE.unsignedInt8 0xFF
-                    ]
+        { count, inner } =
+            List.foldr
+                (\(Encoder be) acc ->
+                    { count = acc.count + 1
+                    , inner = be :: acc.inner
+                    }
                 )
+                { count = 0, inner = [] }
+                items
+    in
+    buildArray4 len count inner
 
 
 {-| Encode a CBOR map (major type 5).
 -}
 map : Sort comparable -> Length -> List ( Encoder, Encoder ) -> Encoder
 map sort len entries =
-    let
-        flatEntries : List BE.Encoder
-        flatEntries =
-            case sort of
-                Unsorted ->
-                    List.map
-                        (\( Encoder k, Encoder v ) -> BE.sequence [ k, v ])
+    case sort of
+        Unsorted ->
+            let
+                { count, flatEntries } =
+                    List.foldr
+                        (\( Encoder k, Encoder v ) acc ->
+                            { count = acc.count + 1
+                            , flatEntries = BE.sequence [ k, v ] :: acc.flatEntries
+                            }
+                        )
+                        { count = 0, flatEntries = [] }
                         entries
+            in
+            buildMap5 len count flatEntries
 
-                Sorted toComparable ->
+        Sorted toComparable ->
+            let
+                flatEntries : List BE.Encoder
+                flatEntries =
                     entries
                         |> List.map
                             (\( Encoder k, Encoder v ) ->
@@ -363,24 +389,8 @@ map sort len entries =
                             )
                         |> List.sortBy Tuple.first
                         |> List.map Tuple.second
-    in
-    case len of
-        Definite ->
-            let
-                count : Int
-                count =
-                    List.length entries
             in
-            Encoder (BE.sequence (encodeHeader 5 count :: flatEntries))
-
-        Indefinite ->
-            Encoder
-                (BE.sequence
-                    [ BE.unsignedInt8 0xBF
-                    , BE.sequence flatEntries
-                    , BE.unsignedInt8 0xFF
-                    ]
-                )
+            buildMap5 len (List.length entries) flatEntries
 
 
 {-| Encode a CBOR semantic tag (major type 6).
@@ -403,28 +413,56 @@ tag t (Encoder be) =
 -}
 keyedRecord : Sort comparable -> Length -> (k -> Encoder) -> List ( k, Maybe Encoder ) -> Encoder
 keyedRecord sort len keyEncoder entries =
-    let
-        presentEntries : List ( Encoder, Encoder )
-        presentEntries =
-            List.filterMap
-                (\( k, maybeEnc ) ->
-                    case maybeEnc of
-                        Just enc ->
-                            Just ( keyEncoder k, enc )
+    case sort of
+        Unsorted ->
+            let
+                { count, flatEntries } =
+                    List.foldr
+                        (\( k, maybeEnc ) acc ->
+                            case maybeEnc of
+                                Just (Encoder vEnc) ->
+                                    let
+                                        (Encoder kEnc) =
+                                            keyEncoder k
+                                    in
+                                    { count = acc.count + 1
+                                    , flatEntries = BE.sequence [ kEnc, vEnc ] :: acc.flatEntries
+                                    }
 
-                        Nothing ->
-                            Nothing
-                )
-                entries
-    in
-    map sort len presentEntries
+                                Nothing ->
+                                    acc
+                        )
+                        { count = 0, flatEntries = [] }
+                        entries
+            in
+            buildMap5 len count flatEntries
 
+        Sorted toComparable ->
+            let
+                flatEntries : List BE.Encoder
+                flatEntries =
+                    entries
+                        |> List.filterMap
+                            (\( k, maybeEnc ) ->
+                                case maybeEnc of
+                                    Just (Encoder vEnc) ->
+                                        let
+                                            (Encoder kEnc) =
+                                                keyEncoder k
 
-{-| Encode a list of items using the same element encoder.
--}
-list : Length -> (a -> Encoder) -> List a -> Encoder
-list len encodeElement items =
-    array len (List.map encodeElement items)
+                                            keyBytes : Bytes.Bytes
+                                            keyBytes =
+                                                BE.encode kEnc
+                                        in
+                                        Just ( toComparable keyBytes, BE.sequence [ BE.bytes keyBytes, vEnc ] )
+
+                                    Nothing ->
+                                        Nothing
+                            )
+                        |> List.sortBy Tuple.first
+                        |> List.map Tuple.second
+            in
+            buildMap5 len (List.length flatEntries) flatEntries
 
 
 {-| Concatenate multiple CBOR items without a wrapping array.
@@ -465,6 +503,38 @@ rawUnsafe bs =
 unwrap : Encoder -> BE.Encoder
 unwrap (Encoder be) =
     be
+
+
+buildArray4 : Length -> Int -> List BE.Encoder -> Encoder
+buildArray4 len count inner =
+    case len of
+        Definite ->
+            Encoder (BE.sequence (encodeHeader 4 count :: inner))
+
+        Indefinite ->
+            Encoder
+                (BE.sequence
+                    [ BE.unsignedInt8 0x9F
+                    , BE.sequence inner
+                    , BE.unsignedInt8 0xFF
+                    ]
+                )
+
+
+buildMap5 : Length -> Int -> List BE.Encoder -> Encoder
+buildMap5 len count flatEntries =
+    case len of
+        Definite ->
+            Encoder (BE.sequence (encodeHeader 5 count :: flatEntries))
+
+        Indefinite ->
+            Encoder
+                (BE.sequence
+                    [ BE.unsignedInt8 0xBF
+                    , BE.sequence flatEntries
+                    , BE.unsignedInt8 0xFF
+                    ]
+                )
 
 
 
