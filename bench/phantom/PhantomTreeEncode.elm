@@ -220,47 +220,117 @@ unwrapNode (Encoder node) =
 resolveSort : SortDecision -> Node -> Node
 resolveSort decision node =
     case node of
-        Leaf be ->
-            Leaf be
+        Leaf _ ->
+            node
 
         SeqNode children ->
             SeqNode (List.map (resolveSort decision) children)
 
-        ArrayNode len children ->
-            ArrayNode len (List.map (resolveSort decision) children)
+        ArrayNode maybeLen children ->
+            let
+                resolved =
+                    List.map (resolveSort decision) children
+            in
+            case maybeLen of
+                Just l ->
+                    collapseArray l resolved
 
-        MapNode Nothing len entries ->
-            MapNode (Just decision) len (mapPairs (resolveSort decision) entries)
+                Nothing ->
+                    ArrayNode Nothing resolved
 
-        MapNode existing len entries ->
-            MapNode existing len (mapPairs (resolveSort decision) entries)
+        MapNode maybeSort maybeLen entries ->
+            let
+                s =
+                    Maybe.withDefault decision maybeSort
+
+                resolved =
+                    mapPairs (resolveSort decision) entries
+            in
+            case maybeLen of
+                Just l ->
+                    collapseMap s l resolved
+
+                Nothing ->
+                    MapNode (Just s) Nothing resolved
 
 
 resolveLength : Length -> Node -> Node
 resolveLength len node =
     case node of
-        Leaf be ->
-            Leaf be
+        Leaf _ ->
+            node
 
         SeqNode children ->
             SeqNode (List.map (resolveLength len) children)
 
-        ArrayNode Nothing children ->
-            ArrayNode (Just len) (List.map (resolveLength len) children)
+        ArrayNode maybeLen children ->
+            collapseArray
+                (Maybe.withDefault len maybeLen)
+                (List.map (resolveLength len) children)
 
-        ArrayNode existing children ->
-            ArrayNode existing (List.map (resolveLength len) children)
+        MapNode maybeSort maybeLen entries ->
+            let
+                l =
+                    Maybe.withDefault len maybeLen
 
-        MapNode sort Nothing entries ->
-            MapNode sort (Just len) (mapPairs (resolveLength len) entries)
+                resolved =
+                    mapPairs (resolveLength len) entries
+            in
+            case maybeSort of
+                Just s ->
+                    collapseMap s l resolved
 
-        MapNode sort existing entries ->
-            MapNode sort existing (mapPairs (resolveLength len) entries)
+                Nothing ->
+                    MapNode Nothing (Just l) resolved
 
 
 mapPairs : (Node -> Node) -> List ( Node, Node ) -> List ( Node, Node )
 mapPairs f pairs =
     List.map (\( a, b ) -> ( f a, f b )) pairs
+
+
+collapseArray : Length -> List Node -> Node
+collapseArray len children =
+    if allLeaf children then
+        Leaf (buildArray len (List.length children) (List.map nodeToBytes children))
+
+    else
+        ArrayNode (Just len) children
+
+
+collapseMap : SortDecision -> Length -> List ( Node, Node ) -> Node
+collapseMap sort len entries =
+    if allLeafPairs entries then
+        Leaf (buildMap sort len entries)
+
+    else
+        MapNode (Just sort) (Just len) entries
+
+
+allLeaf : List Node -> Bool
+allLeaf nodes =
+    case nodes of
+        [] ->
+            True
+
+        (Leaf _) :: rest ->
+            allLeaf rest
+
+        _ ->
+            False
+
+
+allLeafPairs : List ( Node, Node ) -> Bool
+allLeafPairs pairs =
+    case pairs of
+        [] ->
+            True
+
+        ( Leaf _, Leaf _ ) :: rest ->
+            allLeafPairs rest
+
+        _ ->
+            False
 
 
 
