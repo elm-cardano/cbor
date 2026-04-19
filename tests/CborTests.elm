@@ -28,7 +28,7 @@ decodeFromHex decoder hex =
 -}
 encodeToHexIndefinite : CE.Encoder -> String
 encodeToHexIndefinite encoder =
-    Hex.fromBytes (CE.encode { sortKeys = identity, lengthMode = Indefinite } encoder)
+    Hex.fromBytes (CE.encode { sortKeys = Nothing, lengthMode = Indefinite } encoder)
 
 
 {-| Helper: verify item decode -> re-encode round-trip preserves bytes.

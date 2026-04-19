@@ -166,6 +166,34 @@ Symmetric trade-off (~50% each way). **V1 kept** — small integers
 (float16-representable) are common in Cardano CBOR data.
 
 
+### Encoder: `Maybe sortKeys` for map key double-encoding
+
+**Result**: map100 pre-built encoding went from 23314 ns to 3139 ns (now 4%
+faster than toulouse, was 85% slower). keyed10 construction+serialization went
+from 2592 ns to 1009 ns (now 22% faster than toulouse, was 53% slower).
+
+The original `Strategy.sortKeys` was always a function
+`List (Bytes, Encoder) -> List (Bytes, Encoder)`. Even with `unsorted`
+(where `sortKeys = identity`), the map encoder serialized every key to `Bytes`
+to produce the `(keyBytes, entryEncoder)` pairs — then `identity` returned
+them unsorted. This double-encoding (serialize key to `Bytes`, then embed
+via `BE.bytes keyBytes`) was the dominant cost for unsorted maps.
+
+Changing `sortKeys` to `Maybe (...)` lets the encoder branch:
+
+- `Nothing` (unsorted): encode keys inline via `applyStrategy`, no
+  serialization to intermediate `Bytes`.
+- `Just sortFn` (deterministic/canonical): serialize keys to `Bytes` for
+  comparison and sort — same as before.
+
+Combined with the `Direct` optimization (below), `allDirectPairs` pre-builds
+the entry encoder list at construction time when all keys and values are
+`Direct`, so the encode-time closure only checks `lengthMode`.
+
+Breaking change: users with custom strategies must wrap their sort function
+in `Just`.
+
+
 ### Encoder: `Direct` fast path for strategy-independent encoders
 
 **Result**: list100 pre-built encoding went from 3146 ns to 1428 ns (tl gap

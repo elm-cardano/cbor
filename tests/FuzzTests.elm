@@ -281,7 +281,7 @@ lengthEquivalenceProperties =
     let
         indefiniteStrategy : CE.Strategy
         indefiniteStrategy =
-            { sortKeys = identity, lengthMode = Indefinite }
+            { sortKeys = Nothing, lengthMode = Indefinite }
     in
     describe "Definite/indefinite decode equivalence"
         [ fuzz (Fuzz.list Fuzz.int) "array" <|

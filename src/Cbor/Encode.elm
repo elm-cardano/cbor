@@ -79,15 +79,15 @@ type Encoder
 
 {-| Controls key ordering and length mode for collections.
 
-  - `sortKeys` reorders map entries. Each entry is `( keyBytes, entryEncoder )`
-    where `keyBytes` is the encoded key (for comparison) and `entryEncoder`
-    encodes the full key+value pair.
+  - `sortKeys` reorders map entries. `Nothing` preserves insertion order and
+    skips key serialization (fast path). `Just fn` serializes each key to
+    `Bytes` for comparison and reorders entries using `fn`.
   - `lengthMode` controls whether arrays and maps use definite or indefinite
     length encoding.
 
 -}
 type alias Strategy =
-    { sortKeys : List ( Bytes.Bytes, BE.Encoder ) -> List ( Bytes.Bytes, BE.Encoder )
+    { sortKeys : Maybe (List ( Bytes.Bytes, BE.Encoder ) -> List ( Bytes.Bytes, BE.Encoder ))
     , lengthMode : Length
     }
 
@@ -103,7 +103,7 @@ Lexicographic byte order on encoded keys. Definite length.
 -}
 deterministic : Strategy
 deterministic =
-    { sortKeys = sortKeysByHex
+    { sortKeys = Just sortKeysByHex
     , lengthMode = Definite
     }
 
@@ -115,7 +115,7 @@ Shorter keys first, then lexicographic within same length. Definite length.
 -}
 canonical : Strategy
 canonical =
-    { sortKeys = sortKeysCanonicalByHex
+    { sortKeys = Just sortKeysCanonicalByHex
     , lengthMode = Definite
     }
 
@@ -128,7 +128,7 @@ Shorter keys first, then lexicographic within same length. Definite length.
 -}
 ctap2 : Strategy
 ctap2 =
-    { sortKeys = sortKeysCanonicalByHex
+    { sortKeys = Just sortKeysCanonicalByHex
     , lengthMode = Definite
     }
 
@@ -137,7 +137,7 @@ ctap2 =
 -}
 unsorted : Strategy
 unsorted =
-    { sortKeys = identity
+    { sortKeys = Nothing
     , lengthMode = Definite
     }
 
@@ -173,6 +173,19 @@ allDirect encoders =
             allDirect rest
 
         (Encoder _) :: _ ->
+            False
+
+
+allDirectPairs : List ( Encoder, Encoder ) -> Bool
+allDirectPairs pairs =
+    case pairs of
+        [] ->
+            True
+
+        ( Direct _, Direct _ ) :: rest ->
+            allDirectPairs rest
+
+        _ ->
             False
 
 
@@ -409,9 +422,14 @@ The strategy determines key ordering and length mode.
 -}
 map : List ( Encoder, Encoder ) -> Encoder
 map entries =
-    Encoder
-        (\strategy ->
+    let
+        sortAndEncode : (List ( Bytes.Bytes, BE.Encoder ) -> List ( Bytes.Bytes, BE.Encoder )) -> Strategy -> BE.Encoder
+        sortAndEncode sortFn strategy =
             let
+                sorted : List ( Bytes.Bytes, BE.Encoder )
+                sorted =
+                    sortFn encodedEntries
+
                 encodedEntries : List ( Bytes.Bytes, BE.Encoder )
                 encodedEntries =
                     List.map
@@ -420,26 +438,15 @@ map entries =
                                 keyBytes : Bytes.Bytes
                                 keyBytes =
                                     BE.encode (applyStrategy strategy keyEnc)
-
-                                entryEncoder : BE.Encoder
-                                entryEncoder =
-                                    BE.sequence
-                                        [ BE.bytes keyBytes
-                                        , applyStrategy strategy valEnc
-                                        ]
                             in
-                            ( keyBytes, entryEncoder )
+                            ( keyBytes, BE.sequence [ BE.bytes keyBytes, applyStrategy strategy valEnc ] )
                         )
                         entries
-
-                sorted : List ( Bytes.Bytes, BE.Encoder )
-                sorted =
-                    strategy.sortKeys encodedEntries
-
-                entryEncoders : List BE.Encoder
-                entryEncoders =
-                    List.map Tuple.second sorted
             in
+            mapSequence (List.map Tuple.second sorted) strategy
+
+        mapSequence : List BE.Encoder -> Strategy -> BE.Encoder
+        mapSequence entryEncoders strategy =
             case strategy.lengthMode of
                 Definite ->
                     BE.sequence (encodeHeader 5 (List.length entries) :: entryEncoders)
@@ -450,7 +457,47 @@ map entries =
                         , BE.sequence entryEncoders
                         , BE.unsignedInt8 0xFF
                         ]
-        )
+    in
+    if allDirectPairs entries then
+        let
+            preBuilt : List BE.Encoder
+            preBuilt =
+                List.map
+                    (\( keyEnc, valEnc ) ->
+                        BE.sequence [ unwrapDirect keyEnc, unwrapDirect valEnc ]
+                    )
+                    entries
+        in
+        Encoder
+            (\strategy ->
+                case strategy.sortKeys of
+                    Nothing ->
+                        mapSequence preBuilt strategy
+
+                    Just sortFn ->
+                        sortAndEncode sortFn strategy
+            )
+
+    else
+        Encoder
+            (\strategy ->
+                case strategy.sortKeys of
+                    Nothing ->
+                        mapSequence
+                            (List.map
+                                (\( keyEnc, valEnc ) ->
+                                    BE.sequence
+                                        [ applyStrategy strategy keyEnc
+                                        , applyStrategy strategy valEnc
+                                        ]
+                                )
+                                entries
+                            )
+                            strategy
+
+                    Just sortFn ->
+                        sortAndEncode sortFn strategy
+            )
 
 
 {-| Encode a CBOR semantic tag (major type 6).
