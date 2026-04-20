@@ -1234,6 +1234,19 @@ element valueDecoder builder =
                                     valueBD
                                         |> BD.map (\v -> ( rem - 1, f v ))
 
+                                else if rem < 0 then
+                                    -- Indefinite mode: check for break byte
+                                    readItemOrBreak valueDecoder
+                                        |> BD.andThen
+                                            (\maybeV ->
+                                                case maybeV of
+                                                    Nothing ->
+                                                        BD.fail TooFewElements
+
+                                                    Just v ->
+                                                        BD.succeed ( rem, f v )
+                                            )
+
                                 else
                                     BD.fail TooFewElements
                             )
@@ -1264,6 +1277,19 @@ optionalElement valueDecoder default builder =
                         if rem > 0 then
                             valueBD
                                 |> BD.map (\v -> ( rem - 1, f v ))
+
+                        else if rem < 0 then
+                            -- Indefinite mode: check for break byte
+                            readItemOrBreak valueDecoder
+                                |> BD.andThen
+                                    (\maybeV ->
+                                        case maybeV of
+                                            Nothing ->
+                                                BD.succeed ( 0, f default )
+
+                                            Just v ->
+                                                BD.succeed ( rem, f v )
+                                    )
 
                         else
                             BD.succeed ( 0, f default )
@@ -1329,7 +1355,14 @@ buildRecord extra builder =
                                             fail TooManyElements
 
                             Nothing ->
-                                fail IndefiniteLengthNotSupported
+                                case extra of
+                                    IgnoreExtra ->
+                                        decoder
+                                            |> ignore (fromBD skipIndefiniteElements)
+
+                                    FailOnExtra ->
+                                        decoder
+                                            |> ignore (fromBD expectBreak)
                     )
 
         CountedBuilder decoder ->
@@ -1356,7 +1389,26 @@ buildRecord extra builder =
                                 )
 
                         Nothing ->
-                            fail IndefiniteLengthNotSupported
+                            fromBD
+                                (decoder -1
+                                    |> BD.andThen
+                                        (\( rem, value ) ->
+                                            if rem == 0 then
+                                                -- Break was consumed by optionalElement
+                                                BD.succeed value
+
+                                            else
+                                                -- rem < 0: indefinite, need to consume remaining entries
+                                                case extra of
+                                                    IgnoreExtra ->
+                                                        skipIndefiniteElements
+                                                            |> BD.map (\_ -> value)
+
+                                                    FailOnExtra ->
+                                                        expectBreak
+                                                            |> BD.map (\_ -> value)
+                                        )
+                                )
                 )
                 arrayHeader
 
@@ -1413,34 +1465,50 @@ required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
         valueBD : BD.Decoder ctx DecodeError v
         valueBD =
             toBD valueDecoder
+
+        matchKey : k -> KeyedState k (v -> a) -> BD.Decoder ctx DecodeError (KeyedState k a)
+        matchKey key state =
+            if key == expectedKey then
+                valueBD
+                    |> BD.map
+                        (\v ->
+                            { remaining = state.remaining - 1
+                            , pendingKey = Nothing
+                            , value = state.value v
+                            }
+                        )
+
+            else
+                BD.fail KeyMismatch
     in
     KeyedRecordBuilder keyDecoder
         (\remaining ->
             innerDecoder remaining
                 |> BD.andThen
                     (\state ->
-                        (case state.pendingKey of
+                        case state.pendingKey of
                             Just k ->
-                                BD.succeed k
+                                matchKey k state
 
                             Nothing ->
-                                keyBD
-                        )
-                            |> BD.andThen
-                                (\key ->
-                                    if key == expectedKey then
-                                        valueBD
-                                            |> BD.map
-                                                (\v ->
-                                                    { remaining = state.remaining - 1
-                                                    , pendingKey = Nothing
-                                                    , value = state.value v
-                                                    }
-                                                )
+                                if state.remaining == 0 then
+                                    BD.fail TooFewElements
 
-                                    else
-                                        BD.fail KeyMismatch
-                                )
+                                else if state.remaining < 0 then
+                                    -- IndefiniteLength
+                                    readItemOrBreak keyDecoder
+                                        |> BD.andThen
+                                            (\maybeKey ->
+                                                case maybeKey of
+                                                    Nothing ->
+                                                        BD.fail TooFewElements
+
+                                                    Just key ->
+                                                        matchKey key state
+                                            )
+
+                                else
+                                    keyBD |> BD.andThen (\key -> matchKey key state)
                     )
         )
 
@@ -1461,6 +1529,25 @@ optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDe
         valueBD : BD.Decoder ctx DecodeError v
         valueBD =
             toBD valueDecoder
+
+        matchKey : k -> KeyedState k (v -> a) -> BD.Decoder ctx DecodeError (KeyedState k a)
+        matchKey key state =
+            if key == expectedKey then
+                valueBD
+                    |> BD.map
+                        (\v ->
+                            { remaining = state.remaining - 1
+                            , pendingKey = Nothing
+                            , value = state.value v
+                            }
+                        )
+
+            else
+                BD.succeed
+                    { remaining = state.remaining
+                    , pendingKey = Just key
+                    , value = state.value default
+                    }
     in
     KeyedRecordBuilder keyDecoder
         (\remaining ->
@@ -1469,38 +1556,36 @@ optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDe
                     (\state ->
                         if state.remaining == 0 && state.pendingKey == Nothing then
                             BD.succeed
-                                { remaining = 0
+                                { remaining = state.remaining
                                 , pendingKey = Nothing
                                 , value = state.value default
                                 }
 
                         else
-                            (case state.pendingKey of
+                            case state.pendingKey of
                                 Just k ->
-                                    BD.succeed k
+                                    matchKey k state
 
                                 Nothing ->
-                                    keyBD
-                            )
-                                |> BD.andThen
-                                    (\key ->
-                                        if key == expectedKey then
-                                            valueBD
-                                                |> BD.map
-                                                    (\v ->
-                                                        { remaining = state.remaining - 1
-                                                        , pendingKey = Nothing
-                                                        , value = state.value v
-                                                        }
-                                                    )
+                                    if state.remaining < 0 then
+                                        -- IndefiniteLength
+                                        readItemOrBreak keyDecoder
+                                            |> BD.andThen
+                                                (\maybeKey ->
+                                                    case maybeKey of
+                                                        Nothing ->
+                                                            BD.succeed
+                                                                { remaining = 0
+                                                                , pendingKey = Nothing
+                                                                , value = state.value default
+                                                                }
 
-                                        else
-                                            BD.succeed
-                                                { remaining = state.remaining
-                                                , pendingKey = Just key
-                                                , value = state.value default
-                                                }
-                                    )
+                                                        Just key ->
+                                                            matchKey key state
+                                                )
+
+                                    else
+                                        keyBD |> BD.andThen (\key -> matchKey key state)
                     )
         )
 
@@ -1540,7 +1625,29 @@ buildKeyedRecord extra (KeyedRecordBuilder _ decoder) =
                             )
 
                     Nothing ->
-                        fail IndefiniteLengthNotSupported
+                        -- IndefiniteLength
+                        Pure
+                            (decoder -1
+                                |> BD.andThen
+                                    (\state ->
+                                        if state.remaining == 0 && state.pendingKey == Nothing then
+                                            -- Break was consumed by optional
+                                            BD.succeed state.value
+
+                                        else if state.remaining < 0 && state.pendingKey == Nothing then
+                                            case extra of
+                                                IgnoreExtra ->
+                                                    skipIndefiniteElements
+                                                        |> BD.map (\_ -> state.value)
+
+                                                FailOnExtra ->
+                                                    expectBreak
+                                                        |> BD.map (\_ -> state.value)
+
+                                        else
+                                            BD.fail UnexpectedPendingKey
+                                    )
+                            )
             )
 
 
@@ -1619,7 +1726,8 @@ buildUnorderedRecord extra finalize (UnorderedRecordBuilder keyDecoder init hand
                         Pure (scanEntries n keyBD handlers init extra finalize)
 
                     Nothing ->
-                        fail IndefiniteLengthNotSupported
+                        -- IndefiniteLength
+                        Pure (scanIndefiniteEntries keyDecoder handlers init extra finalize)
             )
 
 
@@ -1662,6 +1770,47 @@ scanEntries remaining keyBD handlers acc extra finalize =
                                 FailOnExtra ->
                                     BD.fail TooManyElements
                 )
+
+
+{-| Like scanEntries but for indefinite-length maps.
+Uses readItemOrBreak to check for break (0xFF) before each key.
+-}
+scanIndefiniteEntries : CborDecoder ctx comparable -> Dict comparable (BD.Decoder ctx DecodeError (acc -> acc)) -> acc -> ExtraElements -> (acc -> Maybe a) -> BD.Decoder ctx DecodeError a
+scanIndefiniteEntries keyDecoder handlers acc extra finalize =
+    readItemOrBreak keyDecoder
+        |> BD.andThen
+            (\maybeKey ->
+                case maybeKey of
+                    Nothing ->
+                        case finalize acc of
+                            Just a ->
+                                BD.succeed a
+
+                            Nothing ->
+                                -- TODO: improve error? maybe something like FailedRecordFinalization
+                                BD.fail TooFewElements
+
+                    Just key ->
+                        case Dict.get key handlers of
+                            Just handler ->
+                                handler
+                                    |> BD.andThen
+                                        (\update ->
+                                            scanIndefiniteEntries keyDecoder handlers (update acc) extra finalize
+                                        )
+
+                            Nothing ->
+                                case extra of
+                                    IgnoreExtra ->
+                                        skipFullItem
+                                            |> BD.andThen
+                                                (\() ->
+                                                    scanIndefiniteEntries keyDecoder handlers acc extra finalize
+                                                )
+
+                                    FailOnExtra ->
+                                        BD.fail TooManyElements
+            )
 
 
 
@@ -2017,6 +2166,44 @@ skipIndefiniteElements =
                     )
         )
         ()
+
+
+{-| Read the next byte. If it's the break byte (0xFF), succeed with Nothing.
+Otherwise, pass it to the Item body and return Just the result.
+Used for indefinite-length container support.
+-}
+readItemOrBreak : CborDecoder ctx a -> BD.Decoder ctx DecodeError (Maybe a)
+readItemOrBreak decoder =
+    case decoder of
+        Item body ->
+            u8
+                |> BD.andThen
+                    (\byte ->
+                        if byte == 0xFF then
+                            BD.succeed Nothing
+
+                        else
+                            body byte |> BD.map Just
+                    )
+
+        Pure dec ->
+            dec |> BD.map Just
+
+
+{-| Expect the break byte (0xFF) next in the stream.
+Fails with TooManyElements if the next byte is not break.
+-}
+expectBreak : BD.Decoder ctx DecodeError ()
+expectBreak =
+    u8
+        |> BD.andThen
+            (\byte ->
+                if byte == 0xFF then
+                    BD.succeed ()
+
+                else
+                    BD.fail TooManyElements
+            )
 
 
 {-| How many extra bytes the CBOR argument takes beyond the initial byte.

@@ -24,6 +24,34 @@ decodeFromHex decoder hex =
     CD.decode decoder (Hex.toBytesUnchecked hex)
 
 
+{-| Extract the DecodeError variant from a BD.Error, ignoring position info.
+-}
+extractError : Result (BD.Error ctx CD.DecodeError) a -> Maybe CD.DecodeError
+extractError result =
+    case result of
+        Err err ->
+            extractErrorHelp err
+
+        Ok _ ->
+            Nothing
+
+
+extractErrorHelp : BD.Error ctx CD.DecodeError -> Maybe CD.DecodeError
+extractErrorHelp err =
+    case err of
+        BD.Custom _ e ->
+            Just e
+
+        BD.InContext _ inner ->
+            extractErrorHelp inner
+
+        BD.BadOneOf _ errors ->
+            List.filterMap extractErrorHelp errors |> List.head
+
+        BD.OutOfBounds _ ->
+            Nothing
+
+
 {-| Helper: verify item decode -> re-encode round-trip preserves bytes.
 -}
 itemRoundTrip : String -> Test
@@ -828,8 +856,8 @@ recordBuilderTests =
                             |> CD.buildRecord CD.FailOnExtra
                 in
                 CD.decode decoder encoded
-                    |> Result.toMaybe
-                    |> Expect.equal Nothing
+                    |> extractError
+                    |> Expect.equal (Just CD.TooManyElements)
         , test "too few elements fails" <|
             \_ ->
                 let
@@ -846,8 +874,8 @@ recordBuilderTests =
                             |> CD.buildRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
-                    |> Result.toMaybe
-                    |> Expect.equal Nothing
+                    |> extractError
+                    |> Expect.equal (Just CD.TooFewElements)
         , test "multiple optionals all absent" <|
             \_ ->
                 let
@@ -886,6 +914,174 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok { host = "localhost", port_ = 8080, debug = True, verbose = False })
+        , test "indefinite-length array as record (SimpleBuilder)" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.array Indefinite [ CE.float 1.5, CE.float 2.5 ])
+
+                    decoder : CD.CborDecoder () Point
+                    decoder =
+                        CD.record Point
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.buildRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { x = 1.5, y = 2.5 })
+        , test "indefinite-length array with extras ignored (SimpleBuilder)" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.array Indefinite [ CE.float 1.0, CE.float 2.0, CE.float 99.0 ])
+
+                    decoder : CD.CborDecoder () Point
+                    decoder =
+                        CD.record Point
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.buildRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { x = 1.0, y = 2.0 })
+        , test "indefinite-length array with extras rejected (SimpleBuilder)" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.array Indefinite [ CE.float 1.0, CE.float 2.0, CE.float 99.0 ])
+
+                    decoder : CD.CborDecoder () Point
+                    decoder =
+                        CD.record Point
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.buildRecord CD.FailOnExtra
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just CD.TooManyElements)
+        , test "indefinite-length array exact match with FailOnExtra (SimpleBuilder)" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.array Indefinite [ CE.float 1.5, CE.float 2.5 ])
+
+                    decoder : CD.CborDecoder () Point
+                    decoder =
+                        CD.record Point
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.buildRecord CD.FailOnExtra
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { x = 1.5, y = 2.5 })
+        , test "indefinite-length array optional present (CountedBuilder)" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.array Indefinite [ CE.float 1.0, CE.float 2.0, CE.float 3.0 ])
+
+                    decoder : CD.CborDecoder () Point3D
+                    decoder =
+                        CD.record Point3D
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.optionalElement CD.float 0.0
+                            |> CD.buildRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { x = 1.0, y = 2.0, z = 3.0 })
+        , test "indefinite-length array optional absent (CountedBuilder)" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.array Indefinite [ CE.float 1.0, CE.float 2.0 ])
+
+                    decoder : CD.CborDecoder () Point3D
+                    decoder =
+                        CD.record Point3D
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.optionalElement CD.float 0.0
+                            |> CD.buildRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { x = 1.0, y = 2.0, z = 0.0 })
+        , test "indefinite-length array too few elements (CountedBuilder)" <|
+            \_ ->
+                -- The fused SimpleBuilder chain sees the break byte (0xFF) directly,
+                -- so the float decoder reports WrongInitialByte rather than TooFewElements.
+                -- TODO: feels wrong
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.array Indefinite [ CE.float 1.0 ])
+
+                    decoder : CD.CborDecoder () Point3D
+                    decoder =
+                        CD.record Point3D
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.buildRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just (CD.WrongInitialByte { got = 0xFF }))
+        , test "indefinite-length array too few for required after optional (CountedBuilder)" <|
+            \_ ->
+                -- Place optionalElement first so that subsequent element calls
+                -- go through the CountedBuilder branch with readItemOrBreak.
+                -- TODO: feels wrong
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.array Indefinite [ CE.float 5.0 ])
+
+                    decoder : CD.CborDecoder () Point
+                    decoder =
+                        CD.record (\_ x y -> { x = x, y = y })
+                            |> CD.optionalElement CD.float 0.0
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.buildRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just CD.TooFewElements)
+        , test "indefinite-length array extras rejected (CountedBuilder)" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.array Indefinite [ CE.float 1.0, CE.float 2.0, CE.float 3.0, CE.float 99.0 ])
+
+                    decoder : CD.CborDecoder () Point3D
+                    decoder =
+                        CD.record Point3D
+                            |> CD.element CD.float
+                            |> CD.element CD.float
+                            |> CD.optionalElement CD.float 0.0
+                            |> CD.buildRecord CD.FailOnExtra
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just CD.TooManyElements)
         ]
 
 
@@ -1075,8 +1271,8 @@ keyedRecordBuilderTests =
                             |> CD.buildKeyedRecord CD.FailOnExtra
                 in
                 CD.decode decoder encoded
-                    |> Result.toMaybe
-                    |> Expect.equal Nothing
+                    |> extractError
+                    |> Expect.equal (Just CD.TooManyElements)
         , test "required key mismatch fails" <|
             \_ ->
                 let
@@ -1098,8 +1294,8 @@ keyedRecordBuilderTests =
                             |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
-                    |> Result.toMaybe
-                    |> Expect.equal Nothing
+                    |> extractError
+                    |> Expect.equal (Just CD.KeyMismatch)
         , test "optional as last step with unmatched key fails" <|
             \_ ->
                 let
@@ -1123,8 +1319,194 @@ keyedRecordBuilderTests =
                             |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
-                    |> Result.toMaybe
-                    |> Expect.equal Nothing
+                    |> extractError
+                    |> Expect.equal (Just CD.UnexpectedPendingKey)
+        , test "indefinite-length map all required" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.keyedRecord CD.int Person
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Alice", age = 30 })
+        , test "indefinite-length map with extra ignored" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 2, CE.bool True )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.keyedRecord CD.int Person
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Alice", age = 30 })
+        , test "indefinite-length map with extra rejected" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 2, CE.bool True )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.keyedRecord CD.int Person
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.buildKeyedRecord CD.FailOnExtra
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just CD.TooManyElements)
+        , test "indefinite-length map optional present" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Bob" )
+                                , ( CE.int 1, CE.int 25 )
+                                , ( CE.int 2, CE.string "bob@example.com" )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () PersonOptional
+                    decoder =
+                        CD.keyedRecord CD.int PersonOptional
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.optional 2 CD.string ""
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Bob", age = 25, email = "bob@example.com" })
+        , test "indefinite-length map optional absent" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Charlie" )
+                                , ( CE.int 1, CE.int 35 )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () PersonOptional
+                    decoder =
+                        CD.keyedRecord CD.int PersonOptional
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.optional 2 CD.string ""
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Charlie", age = 35, email = "" })
+        , test "indefinite-length map key mismatch" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 5, CE.int 30 )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.keyedRecord CD.int Person
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just CD.KeyMismatch)
+        , test "indefinite-length map required field hits break" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.keyedRecord CD.int Person
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just CD.TooFewElements)
+        , test "indefinite-length map optional stashes unmatched key" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 3, CE.bool True )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () PersonOptional
+                    decoder =
+                        CD.keyedRecord CD.int PersonOptional
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.optional 2 CD.string ""
+                            |> CD.buildKeyedRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just CD.UnexpectedPendingKey)
         ]
 
 
@@ -1228,8 +1610,8 @@ unorderedRecordBuilderTests =
                                 (\acc -> Maybe.map2 Person acc.name acc.age)
                 in
                 CD.decode decoder encoded
-                    |> Result.toMaybe
-                    |> Expect.equal Nothing
+                    |> extractError
+                    |> Expect.equal (Just CD.TooManyElements)
         , test "missing required field fails" <|
             \_ ->
                 let
@@ -1251,8 +1633,126 @@ unorderedRecordBuilderTests =
                                 (\acc -> Maybe.map2 Person acc.name acc.age)
                 in
                 CD.decode decoder encoded
-                    |> Result.toMaybe
-                    |> Expect.equal Nothing
+                    |> extractError
+                    |> Expect.equal (Just CD.TooFewElements)
+        , test "indefinite-length map basic" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.unorderedRecord CD.int { name = Nothing, age = Nothing }
+                            |> CD.onKey 0 CD.string (\v acc -> { acc | name = Just v })
+                            |> CD.onKey 1 CD.int (\v acc -> { acc | age = Just v })
+                            |> CD.buildUnorderedRecord CD.IgnoreExtra
+                                (\acc -> Maybe.map2 Person acc.name acc.age)
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Alice", age = 30 })
+        , test "indefinite-length map reversed keys" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 1, CE.int 30 )
+                                , ( CE.int 0, CE.string "Alice" )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.unorderedRecord CD.int { name = Nothing, age = Nothing }
+                            |> CD.onKey 0 CD.string (\v acc -> { acc | name = Just v })
+                            |> CD.onKey 1 CD.int (\v acc -> { acc | age = Just v })
+                            |> CD.buildUnorderedRecord CD.IgnoreExtra
+                                (\acc -> Maybe.map2 Person acc.name acc.age)
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Alice", age = 30 })
+        , test "indefinite-length map extra keys ignored" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 99, CE.bool True )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.unorderedRecord CD.int { name = Nothing, age = Nothing }
+                            |> CD.onKey 0 CD.string (\v acc -> { acc | name = Just v })
+                            |> CD.onKey 1 CD.int (\v acc -> { acc | age = Just v })
+                            |> CD.buildUnorderedRecord CD.IgnoreExtra
+                                (\acc -> Maybe.map2 Person acc.name acc.age)
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Alice", age = 30 })
+        , test "indefinite-length map extra keys rejected" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 99, CE.bool True )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.unorderedRecord CD.int { name = Nothing, age = Nothing }
+                            |> CD.onKey 0 CD.string (\v acc -> { acc | name = Just v })
+                            |> CD.onKey 1 CD.int (\v acc -> { acc | age = Just v })
+                            |> CD.buildUnorderedRecord CD.FailOnExtra
+                                (\acc -> Maybe.map2 Person acc.name acc.age)
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just CD.TooManyElements)
+        , test "indefinite-length map missing field fails" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.unorderedRecord CD.int { name = Nothing, age = Nothing }
+                            |> CD.onKey 0 CD.string (\v acc -> { acc | name = Just v })
+                            |> CD.onKey 1 CD.int (\v acc -> { acc | age = Just v })
+                            |> CD.buildUnorderedRecord CD.IgnoreExtra
+                                (\acc -> Maybe.map2 Person acc.name acc.age)
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just CD.TooFewElements)
         ]
 
 
