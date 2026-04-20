@@ -857,7 +857,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooManyElements)
+                    |> Expect.equal (Just (CD.TooManyElements (Just { expected = 2, got = 4 })))
         , test "too few elements fails" <|
             \_ ->
                 let
@@ -875,7 +875,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooFewElements)
+                    |> Expect.equal (Just (CD.TooFewElements (Just { expected = 2, got = 1 })))
         , test "multiple optionals all absent" <|
             \_ ->
                 let
@@ -965,7 +965,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooManyElements)
+                    |> Expect.equal (Just (CD.TooManyElements Nothing))
         , test "indefinite-length array exact match with FailOnExtra (SimpleBuilder)" <|
             \_ ->
                 let
@@ -1062,7 +1062,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooFewElements)
+                    |> Expect.equal (Just (CD.TooFewElements Nothing))
         , test "indefinite-length array extras rejected (CountedBuilder)" <|
             \_ ->
                 let
@@ -1081,7 +1081,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooManyElements)
+                    |> Expect.equal (Just (CD.TooManyElements Nothing))
         ]
 
 
@@ -1123,7 +1123,7 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () Person
                     decoder =
-                        CD.keyedRecord CD.int Person
+                        CD.keyedRecord CD.int String.fromInt Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord CD.IgnoreExtra
@@ -1146,7 +1146,7 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () PersonOptional
                     decoder =
-                        CD.keyedRecord CD.int PersonOptional
+                        CD.keyedRecord CD.int String.fromInt PersonOptional
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
@@ -1169,7 +1169,7 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () PersonOptional
                     decoder =
-                        CD.keyedRecord CD.int PersonOptional
+                        CD.keyedRecord CD.int String.fromInt PersonOptional
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
@@ -1193,7 +1193,7 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () PersonFull
                     decoder =
-                        CD.keyedRecord CD.int PersonFull
+                        CD.keyedRecord CD.int String.fromInt PersonFull
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
@@ -1217,7 +1217,7 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () DetailedPerson
                     decoder =
-                        CD.keyedRecord CD.int DetailedPerson
+                        CD.keyedRecord CD.int String.fromInt DetailedPerson
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
@@ -1242,7 +1242,7 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () Person
                     decoder =
-                        CD.keyedRecord CD.int Person
+                        CD.keyedRecord CD.int String.fromInt Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord CD.IgnoreExtra
@@ -1265,14 +1265,14 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () Person
                     decoder =
-                        CD.keyedRecord CD.int Person
+                        CD.keyedRecord CD.int String.fromInt Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord CD.FailOnExtra
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooManyElements)
+                    |> Expect.equal (Just (CD.TooManyElements Nothing))
         , test "required key mismatch fails" <|
             \_ ->
                 let
@@ -1288,15 +1288,15 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () Person
                     decoder =
-                        CD.keyedRecord CD.int Person
+                        CD.keyedRecord CD.int String.fromInt Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.KeyMismatch)
-        , test "optional as last step with unmatched key fails" <|
+                    |> Expect.equal (Just (CD.KeyMismatch { expected = "1", got = "5" }))
+        , test "optional as last step with unmatched key and IgnoreExtra succeeds" <|
             \_ ->
                 let
                     encoded : Bytes.Bytes
@@ -1312,15 +1312,14 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () PersonOptional
                     decoder =
-                        CD.keyedRecord CD.int PersonOptional
+                        CD.keyedRecord CD.int String.fromInt PersonOptional
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
                             |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
-                    |> extractError
-                    |> Expect.equal (Just CD.UnexpectedPendingKey)
+                    |> Expect.equal (Ok (PersonOptional "Alice" 30 ""))
         , test "indefinite-length map all required" <|
             \_ ->
                 let
@@ -1336,7 +1335,7 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () Person
                     decoder =
-                        CD.keyedRecord CD.int Person
+                        CD.keyedRecord CD.int String.fromInt Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord CD.IgnoreExtra
@@ -1359,7 +1358,7 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () Person
                     decoder =
-                        CD.keyedRecord CD.int Person
+                        CD.keyedRecord CD.int String.fromInt Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord CD.IgnoreExtra
@@ -1382,14 +1381,14 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () Person
                     decoder =
-                        CD.keyedRecord CD.int Person
+                        CD.keyedRecord CD.int String.fromInt Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord CD.FailOnExtra
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooManyElements)
+                    |> Expect.equal (Just (CD.TooManyElements Nothing))
         , test "indefinite-length map optional present" <|
             \_ ->
                 let
@@ -1406,7 +1405,7 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () PersonOptional
                     decoder =
-                        CD.keyedRecord CD.int PersonOptional
+                        CD.keyedRecord CD.int String.fromInt PersonOptional
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
@@ -1429,7 +1428,7 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () PersonOptional
                     decoder =
-                        CD.keyedRecord CD.int PersonOptional
+                        CD.keyedRecord CD.int String.fromInt PersonOptional
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
@@ -1452,14 +1451,14 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () Person
                     decoder =
-                        CD.keyedRecord CD.int Person
+                        CD.keyedRecord CD.int String.fromInt Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.KeyMismatch)
+                    |> Expect.equal (Just (CD.KeyMismatch { expected = "1", got = "5" }))
         , test "indefinite-length map required field hits break" <|
             \_ ->
                 let
@@ -1474,15 +1473,15 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () Person
                     decoder =
-                        CD.keyedRecord CD.int Person
+                        CD.keyedRecord CD.int String.fromInt Person
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooFewElements)
-        , test "indefinite-length map optional stashes unmatched key" <|
+                    |> Expect.equal (Just (CD.MissingKey "1"))
+        , test "indefinite-length map optional stashes unmatched key and IgnoreExtra succeeds" <|
             \_ ->
                 let
                     encoded : Bytes.Bytes
@@ -1498,15 +1497,14 @@ keyedRecordBuilderTests =
 
                     decoder : CD.CborDecoder () PersonOptional
                     decoder =
-                        CD.keyedRecord CD.int PersonOptional
+                        CD.keyedRecord CD.int String.fromInt PersonOptional
                             |> CD.required 0 CD.string
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
                             |> CD.buildKeyedRecord CD.IgnoreExtra
                 in
                 CD.decode decoder encoded
-                    |> extractError
-                    |> Expect.equal (Just CD.UnexpectedPendingKey)
+                    |> Expect.equal (Ok (PersonOptional "Alice" 30 ""))
         ]
 
 
@@ -1611,7 +1609,7 @@ unorderedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooManyElements)
+                    |> Expect.equal (Just (CD.TooManyElements Nothing))
         , test "missing required field fails" <|
             \_ ->
                 let
@@ -1634,7 +1632,7 @@ unorderedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooFewElements)
+                    |> Expect.equal (Just CD.FailedToFinalizeRecord)
         , test "indefinite-length map basic" <|
             \_ ->
                 let
@@ -1729,7 +1727,7 @@ unorderedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooManyElements)
+                    |> Expect.equal (Just (CD.TooManyElements Nothing))
         , test "indefinite-length map missing field fails" <|
             \_ ->
                 let
@@ -1752,7 +1750,7 @@ unorderedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.TooFewElements)
+                    |> Expect.equal (Just CD.FailedToFinalizeRecord)
         ]
 
 
@@ -2329,11 +2327,11 @@ fieldTests =
     describe "Cbor.Decode.field"
         [ test "key match decodes value" <|
             \_ ->
-                decodeFromHex (CD.field 1 CD.int CD.string) "0163666f6f"
+                decodeFromHex (CD.field 1 String.fromInt CD.int CD.string) "0163666f6f"
                     |> Expect.equal (Ok "foo")
         , test "key mismatch fails" <|
             \_ ->
-                decodeFromHex (CD.field 1 CD.int CD.string) "0263666f6f"
+                decodeFromHex (CD.field 1 String.fromInt CD.int CD.string) "0263666f6f"
                     |> Result.toMaybe
                     |> Expect.equal Nothing
         ]

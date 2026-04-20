@@ -502,7 +502,7 @@ decR10Manual =
 
 decKR3Builder : CD.CborDecoder ctx R3
 decKR3Builder =
-    CD.keyedRecord CD.int R3
+    CD.keyedRecord CD.int String.fromInt R3
         |> CD.required 0 CD.int
         |> CD.required 1 CD.int
         |> CD.required 2 CD.int
@@ -511,7 +511,7 @@ decKR3Builder =
 
 decKR10Builder : CD.CborDecoder ctx R10
 decKR10Builder =
-    CD.keyedRecord CD.int R10
+    CD.keyedRecord CD.int String.fromInt R10
         |> CD.required 0 CD.int
         |> CD.required 1 CD.int
         |> CD.required 2 CD.int

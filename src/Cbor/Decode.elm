@@ -24,7 +24,7 @@ Run them with `decode`, or convert to a `Bytes.Decoder.Decoder` with `toBD`.
 
     decodePerson : CD.CborDecoder ctx Person
     decodePerson =
-        CD.keyedRecord CD.int Person
+        CD.keyedRecord CD.int String.fromInt Person
             |> CD.required 0 CD.string
             |> CD.required 1 CD.int
             |> CD.buildKeyedRecord CD.IgnoreExtra
@@ -155,11 +155,12 @@ type DecodeError
     | WrongTag { expected : Int, got : Int }
     | ReservedAdditionalInfo Int
     | IntegerOverflow
-    | KeyMismatch
-    | TooFewElements
-    | TooManyElements
-    | UnexpectedPendingKey
-    | IndefiniteLengthNotSupported
+    | MissingKey String
+    | KeyMismatch { expected : String, got : String }
+    | TooFewElements (Maybe { expected : Int, got : Int })
+    | TooManyElements (Maybe { expected : Int, got : Int })
+    | FailedToFinalizeRecord
+    | PureDecoderInIndefiniteLength
     | UnknownMajorType Int
 
 
@@ -183,20 +184,33 @@ errorToString err =
         IntegerOverflow ->
             "Integer value exceeds safe range (2^52)"
 
-        KeyMismatch ->
-            "Map key mismatch"
+        MissingKey key ->
+            "Missing required key: " ++ key
 
-        TooFewElements ->
-            "Array has fewer elements than expected"
+        KeyMismatch { expected, got } ->
+            "Key mismatch: expected " ++ expected ++ " but got " ++ got
 
-        TooManyElements ->
-            "Array has more elements than expected"
+        TooFewElements maybeCounts ->
+            case maybeCounts of
+                Just { expected, got } ->
+                    "Too few elements: expected " ++ String.fromInt expected ++ " but got " ++ String.fromInt got
 
-        UnexpectedPendingKey ->
-            "Unexpected pending key at end of keyed record"
+                Nothing ->
+                    "Too few elements"
 
-        IndefiniteLengthNotSupported ->
-            "Indefinite-length encoding not supported in record builder"
+        TooManyElements maybeCounts ->
+            case maybeCounts of
+                Just { expected, got } ->
+                    "Too many elements: expected " ++ String.fromInt expected ++ " but got " ++ String.fromInt got
+
+                Nothing ->
+                    "Too many elements"
+
+        FailedToFinalizeRecord ->
+            "Failed to finalize record: not all required fields were decoded"
+
+        PureDecoderInIndefiniteLength ->
+            "Pure decoder cannot be used as element of an indefinite-length collection"
 
         UnknownMajorType mt ->
             "Unknown major type: " ++ String.fromInt mt
@@ -908,7 +922,7 @@ array elementDecoder =
                                 []
 
                         Pure _ ->
-                            BD.fail (WrongInitialByte { got = initialByte })
+                            BD.fail PureDecoderInIndefiniteLength
 
                 else
                     withArgument additionalInfo
@@ -969,7 +983,7 @@ keyValue keyDecoder valueDecoder =
                                 []
 
                         Pure _ ->
-                            BD.fail (WrongInitialByte { got = initialByte })
+                            BD.fail PureDecoderInIndefiniteLength
 
                 else
                     withArgument additionalInfo
@@ -987,8 +1001,8 @@ Reads the key, compares via `==`, then decodes the value on match.
 Fails on mismatch.
 
 -}
-field : k -> CborDecoder ctx k -> CborDecoder ctx v -> CborDecoder ctx v
-field expectedKey keyDecoder valueDecoder =
+field : k -> (k -> String) -> CborDecoder ctx k -> CborDecoder ctx v -> CborDecoder ctx v
+field expectedKey displayKey keyDecoder valueDecoder =
     keyDecoder
         |> andThen
             (\key ->
@@ -996,7 +1010,7 @@ field expectedKey keyDecoder valueDecoder =
                     valueDecoder
 
                 else
-                    fail KeyMismatch
+                    fail (KeyMismatch { expected = displayKey expectedKey, got = displayKey key })
             )
 
 
@@ -1067,7 +1081,7 @@ foldEntries keyDecoder handler initialAcc =
                                 initialAcc
 
                         Pure _ ->
-                            BD.fail (WrongInitialByte { got = initialByte })
+                            BD.fail PureDecoderInIndefiniteLength
 
                 else
                     withArgument additionalInfo
@@ -1241,14 +1255,14 @@ element valueDecoder builder =
                                             (\maybeV ->
                                                 case maybeV of
                                                     Nothing ->
-                                                        BD.fail TooFewElements
+                                                        BD.fail (TooFewElements Nothing)
 
                                                     Just v ->
                                                         BD.succeed ( rem, f v )
                                             )
 
                                 else
-                                    BD.fail TooFewElements
+                                    BD.fail (TooFewElements Nothing)
                             )
                 )
 
@@ -1340,7 +1354,7 @@ buildRecord extra builder =
                         case maybeN of
                             Just n ->
                                 if n < expectedCount then
-                                    fail TooFewElements
+                                    fail (TooFewElements (Just { expected = expectedCount, got = n }))
 
                                 else if n == expectedCount then
                                     decoder
@@ -1352,7 +1366,7 @@ buildRecord extra builder =
                                                 |> ignore (fromBD (skipNFullItems (n - expectedCount)))
 
                                         FailOnExtra ->
-                                            fail TooManyElements
+                                            fail (TooManyElements (Just { expected = expectedCount, got = n }))
 
                             Nothing ->
                                 case extra of
@@ -1384,7 +1398,7 @@ buildRecord extra builder =
                                                             |> BD.map (\_ -> value)
 
                                                     FailOnExtra ->
-                                                        BD.fail TooManyElements
+                                                        BD.fail (TooManyElements Nothing)
                                         )
                                 )
 
@@ -1420,7 +1434,7 @@ buildRecord extra builder =
 {-| Opaque builder for decoding CBOR maps into Elm values.
 -}
 type KeyedRecordBuilder ctx k a
-    = KeyedRecordBuilder (CborDecoder ctx k) (Int -> BD.Decoder ctx DecodeError (KeyedState k a))
+    = KeyedRecordBuilder (CborDecoder ctx k) (k -> String) (Int -> BD.Decoder ctx DecodeError (KeyedState k a))
 
 
 type alias KeyedState k a =
@@ -1432,15 +1446,16 @@ type alias KeyedState k a =
 
 {-| Start building a keyed record decoder.
 
-    keyedRecord int Person
+    keyedRecord int String.fromInt Person
         |> required 0 string
         |> required 1 int
         |> buildKeyedRecord IgnoreExtra
 
 -}
-keyedRecord : CborDecoder ctx k -> a -> KeyedRecordBuilder ctx k a
-keyedRecord keyDecoder constructor =
+keyedRecord : CborDecoder ctx k -> (k -> String) -> a -> KeyedRecordBuilder ctx k a
+keyedRecord keyDecoder displayKey constructor =
     KeyedRecordBuilder keyDecoder
+        displayKey
         (\remaining ->
             BD.succeed
                 { remaining = remaining
@@ -1456,7 +1471,7 @@ The key order in the builder must match the key order in the CBOR data.
 
 -}
 required : k -> CborDecoder ctx v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
-required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
+required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder displayKey innerDecoder) =
     let
         keyBD : BD.Decoder ctx DecodeError k
         keyBD =
@@ -1479,9 +1494,10 @@ required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
                         )
 
             else
-                BD.fail KeyMismatch
+                BD.fail (KeyMismatch { expected = displayKey expectedKey, got = displayKey key })
     in
     KeyedRecordBuilder keyDecoder
+        displayKey
         (\remaining ->
             innerDecoder remaining
                 |> BD.andThen
@@ -1492,7 +1508,7 @@ required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
 
                             Nothing ->
                                 if state.remaining == 0 then
-                                    BD.fail TooFewElements
+                                    BD.fail (MissingKey (displayKey expectedKey))
 
                                 else if state.remaining < 0 then
                                     -- IndefiniteLength
@@ -1501,7 +1517,7 @@ required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder innerDecoder) =
                                             (\maybeKey ->
                                                 case maybeKey of
                                                     Nothing ->
-                                                        BD.fail TooFewElements
+                                                        BD.fail (MissingKey (displayKey expectedKey))
 
                                                     Just key ->
                                                         matchKey key state
@@ -1520,7 +1536,7 @@ and the default value is used.
 
 -}
 optional : k -> CborDecoder ctx v -> v -> KeyedRecordBuilder ctx k (v -> a) -> KeyedRecordBuilder ctx k a
-optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDecoder) =
+optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder displayKey innerDecoder) =
     let
         keyBD : BD.Decoder ctx DecodeError k
         keyBD =
@@ -1550,6 +1566,7 @@ optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder innerDe
                     }
     in
     KeyedRecordBuilder keyDecoder
+        displayKey
         (\remaining ->
             innerDecoder remaining
                 |> BD.andThen
@@ -1597,7 +1614,7 @@ entries were consumed.
 
 -}
 buildKeyedRecord : ExtraElements -> KeyedRecordBuilder ctx k a -> CborDecoder ctx a
-buildKeyedRecord extra (KeyedRecordBuilder _ decoder) =
+buildKeyedRecord extra (KeyedRecordBuilder _ _ decoder) =
     mapHeader
         |> andThen
             (\maybeN ->
@@ -1617,10 +1634,20 @@ buildKeyedRecord extra (KeyedRecordBuilder _ decoder) =
                                                         |> BD.map (\_ -> state.value)
 
                                                 FailOnExtra ->
-                                                    BD.fail TooManyElements
+                                                    BD.fail (TooManyElements Nothing)
 
                                         else
-                                            BD.fail UnexpectedPendingKey
+                                            -- A pending key exists: an optional read a key that didn't match.
+                                            -- The value for that key is still in the stream.
+                                            case extra of
+                                                IgnoreExtra ->
+                                                    -- Skip the pending key's value + remaining entries
+                                                    skipFullItem
+                                                        |> BD.andThen (\() -> skipEntries (state.remaining - 1))
+                                                        |> BD.map (\_ -> state.value)
+
+                                                FailOnExtra ->
+                                                    BD.fail (TooManyElements Nothing)
                                     )
                             )
 
@@ -1644,8 +1671,21 @@ buildKeyedRecord extra (KeyedRecordBuilder _ decoder) =
                                                     expectBreak
                                                         |> BD.map (\_ -> state.value)
 
+                                        else if state.pendingKey /= Nothing then
+                                            -- A pending key exists: handle like extra elements
+                                            case extra of
+                                                IgnoreExtra ->
+                                                    -- Skip pending key's value + remaining indefinite entries
+                                                    skipFullItem
+                                                        |> BD.andThen (\() -> skipIndefiniteElements)
+                                                        |> BD.map (\_ -> state.value)
+
+                                                FailOnExtra ->
+                                                    BD.fail (TooManyElements Nothing)
+
                                         else
-                                            BD.fail UnexpectedPendingKey
+                                            -- remaining == 0 but pendingKey exists (shouldn't happen)
+                                            BD.fail (TooManyElements Nothing)
                                     )
                             )
             )
@@ -1738,13 +1778,13 @@ but would overflow on maps with thousands of entries.
 -}
 scanEntries : Int -> BD.Decoder ctx DecodeError comparable -> Dict comparable (BD.Decoder ctx DecodeError (acc -> acc)) -> acc -> ExtraElements -> (acc -> Maybe a) -> BD.Decoder ctx DecodeError a
 scanEntries remaining keyBD handlers acc extra finalize =
-    if remaining <= 0 then
+    if remaining == 0 then
         case finalize acc of
             Just a ->
                 BD.succeed a
 
             Nothing ->
-                BD.fail TooFewElements
+                BD.fail FailedToFinalizeRecord
 
     else
         keyBD
@@ -1768,7 +1808,7 @@ scanEntries remaining keyBD handlers acc extra finalize =
                                             )
 
                                 FailOnExtra ->
-                                    BD.fail TooManyElements
+                                    BD.fail (TooManyElements Nothing)
                 )
 
 
@@ -1787,8 +1827,7 @@ scanIndefiniteEntries keyDecoder handlers acc extra finalize =
                                 BD.succeed a
 
                             Nothing ->
-                                -- TODO: improve error? maybe something like FailedRecordFinalization
-                                BD.fail TooFewElements
+                                BD.fail FailedToFinalizeRecord
 
                     Just key ->
                         case Dict.get key handlers of
@@ -1809,7 +1848,7 @@ scanIndefiniteEntries keyDecoder handlers acc extra finalize =
                                                 )
 
                                     FailOnExtra ->
-                                        BD.fail TooManyElements
+                                        BD.fail (TooManyElements Nothing)
             )
 
 
@@ -2202,7 +2241,7 @@ expectBreak =
                     BD.succeed ()
 
                 else
-                    BD.fail TooManyElements
+                    BD.fail (TooManyElements Nothing)
             )
 
 
