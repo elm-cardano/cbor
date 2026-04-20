@@ -1626,14 +1626,11 @@ buildUnorderedRecord extra finalize (UnorderedRecordBuilder keyDecoder init hand
             )
 
 
-
-{- Recursive through BD.andThen rather than BD.loop to avoid per-iteration
-   tuple + Step wrapper allocations (~25% faster at 10 entries). The trade-off
-   is O(N) stack depth (2 frames per entry), which is fine for typical CBOR maps
-   but would overflow on maps with thousands of entries.
+{-| Recursive through BD.andThen rather than BD.loop to avoid per-iteration
+tuple + Step wrapper allocations (~25% faster at 10 entries). The trade-off
+is O(N) stack depth (2 frames per entry), which is fine for typical CBOR maps
+but would overflow on maps with thousands of entries.
 -}
-
-
 scanEntries : Int -> BD.Decoder ctx DecodeError comparable -> Dict comparable (BD.Decoder ctx DecodeError (acc -> acc)) -> acc -> ExtraElements -> (acc -> Maybe a) -> BD.Decoder ctx DecodeError a
 scanEntries remaining keyBD handlers acc extra finalize =
     if remaining <= 0 then
