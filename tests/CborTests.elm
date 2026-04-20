@@ -1320,6 +1320,31 @@ keyedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok (PersonOptional "Alice" 30 ""))
+        , test "optional as last step with unmatched key and FailOnExtra fails" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 3, CE.bool True )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () PersonOptional
+                    decoder =
+                        CD.keyedRecord CD.int String.fromInt PersonOptional
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.optional 2 CD.string ""
+                            |> CD.buildKeyedRecord CD.FailOnExtra
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just (CD.TooManyElements Nothing))
         , test "indefinite-length map all required" <|
             \_ ->
                 let
@@ -1505,6 +1530,31 @@ keyedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> Expect.equal (Ok (PersonOptional "Alice" 30 ""))
+        , test "indefinite-length map optional stashes unmatched key and FailOnExtra fails" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Indefinite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                , ( CE.int 3, CE.bool True )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () PersonOptional
+                    decoder =
+                        CD.keyedRecord CD.int String.fromInt PersonOptional
+                            |> CD.required 0 CD.string
+                            |> CD.required 1 CD.int
+                            |> CD.optional 2 CD.string ""
+                            |> CD.buildKeyedRecord CD.FailOnExtra
+                in
+                CD.decode decoder encoded
+                    |> extractError
+                    |> Expect.equal (Just (CD.TooManyElements Nothing))
         ]
 
 
