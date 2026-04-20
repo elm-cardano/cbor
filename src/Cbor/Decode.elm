@@ -536,22 +536,9 @@ decodeBytesRaw =
             )
 
 
-skipItems : Int -> BD.Decoder ctx DecodeError ()
-skipItems count =
-    BD.loop
-        (\remaining ->
-            if remaining <= 0 then
-                BD.succeed (BD.Done ())
-
-            else
-                itemBD |> BD.map (\_ -> BD.Loop (remaining - 1))
-        )
-        count
-
-
 skipEntries : Int -> BD.Decoder ctx DecodeError ()
 skipEntries count =
-    skipItems (count * 2)
+    skipNFullItems (count * 2)
 
 
 intToHex : Int -> String
@@ -1339,7 +1326,7 @@ buildRecord extra builder =
                                     case extra of
                                         IgnoreExtra ->
                                             decoder
-                                                |> ignore (fromBD (skipItems (n - expectedCount)))
+                                                |> ignore (fromBD (skipNFullItems (n - expectedCount)))
 
                                         FailOnExtra ->
                                             fail TooManyElements
@@ -1363,7 +1350,7 @@ buildRecord extra builder =
                                             else
                                                 case extra of
                                                     IgnoreExtra ->
-                                                        skipItems rem
+                                                        skipNFullItems rem
                                                             |> BD.map (\_ -> value)
 
                                                     FailOnExtra ->
@@ -1672,9 +1659,9 @@ scanEntries remaining keyBD handlers acc extra finalize =
                         Nothing ->
                             case extra of
                                 IgnoreExtra ->
-                                    itemBD
+                                    skipFullItem
                                         |> BD.andThen
-                                            (\_ ->
+                                            (\() ->
                                                 scanEntries (remaining - 1) keyBD handlers acc extra finalize
                                             )
 
