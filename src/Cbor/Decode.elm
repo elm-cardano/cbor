@@ -1740,9 +1740,18 @@ Safe for typical CBOR maps (up to a few hundred entries).
 buildUnorderedRecord : ExtraElements -> (acc -> Maybe a) -> UnorderedRecordBuilder ctx comparable acc -> CborDecoder ctx a
 buildUnorderedRecord extra finalize (UnorderedRecordBuilder keyDecoder init handlers) =
     let
-        config : ItemConfig ctx comparable acc a
+        keyInner : InnerDecoder ctx comparable
+        keyInner =
+            unwrap keyDecoder
+
+        config : MapConfig ctx comparable acc a
         config =
-            ItemConfig extra handlers finalize (unwrap keyDecoder)
+            { extra = extra
+            , handlers = Dict.map (\_ h -> u8 |> BD.andThen h) handlers
+            , finalize = finalize
+            , keyBD = u8 |> BD.andThen keyInner
+            , keyInner = keyInner
+            }
     in
     Item
         (\byte ->
@@ -1751,14 +1760,10 @@ buildUnorderedRecord extra finalize (UnorderedRecordBuilder keyDecoder init hand
                     (\maybeN ->
                         case maybeN of
                             Just n ->
-                                if n == 0 then
-                                    finalizeAcc config init
-
-                                else
-                                    u8 |> BD.andThen (processDefiniteMap n config init)
+                                processDefiniteEntry n config init
 
                             Nothing ->
-                                u8 |> BD.andThen (processIndefiniteMap config init)
+                                u8 |> BD.andThen (processIndefiniteEntry config init)
                     )
         )
 
@@ -1777,85 +1782,80 @@ type alias InnerDecoder ctx a =
     Int -> BD.Decoder ctx DecodeError a
 
 
-type alias ItemConfig ctx comparable acc a =
+type alias MapConfig ctx comparable acc a =
     { extra : ExtraElements
-    , handlers : Dict comparable (InnerDecoder ctx (acc -> acc))
+    , handlers : Dict comparable (BD.Decoder ctx DecodeError (acc -> acc))
     , finalize : acc -> Maybe a
-    , keyDecoder : InnerDecoder ctx comparable
+    , keyBD : BD.Decoder ctx DecodeError comparable
+    , keyInner : InnerDecoder ctx comparable
     }
 
 
-processIndefiniteMap : ItemConfig ctx comparable acc a -> acc -> InnerDecoder ctx a
-processIndefiniteMap config acc byte =
-    case byte of
-        0xFF ->
-            case config.finalize acc of
-                Just a ->
-                    BD.succeed a
+processIndefiniteEntry : MapConfig ctx comparable acc a -> acc -> InnerDecoder ctx a
+processIndefiniteEntry config acc byte =
+    if byte == 0xFF then
+        finalizeWith config.finalize acc
 
-                Nothing ->
-                    BD.fail FailedToFinalizeRecord
+    else
+        config.keyInner byte
+            |> BD.andThen
+                (\key ->
+                    case Dict.get key config.handlers of
+                        Just handler ->
+                            handler
+                                |> BD.andThen
+                                    (\update ->
+                                        u8 |> BD.andThen (processIndefiniteEntry config (update acc))
+                                    )
 
-        _ ->
-            config.keyDecoder byte
-                |> BD.andThen
-                    (\key -> u8 |> BD.andThen (processIndefiniteItem config acc key))
+                        Nothing ->
+                            case config.extra of
+                                IgnoreExtra ->
+                                    skipFullItem
+                                        |> BD.andThen
+                                            (\() ->
+                                                u8 |> BD.andThen (processIndefiniteEntry config acc)
+                                            )
 
-
-processIndefiniteItem : ItemConfig ctx comparable acc a -> acc -> comparable -> Int -> BD.Decoder ctx DecodeError a
-processIndefiniteItem config acc key byte =
-    case Dict.get key config.handlers of
-        Just handler ->
-            handler byte
-                |> BD.andThen (\update -> u8 |> BD.andThen (processIndefiniteMap config (update acc)))
-
-        Nothing ->
-            case config.extra of
-                IgnoreExtra ->
-                    skipContent byte
-                        |> BD.andThen (\() -> u8)
-                        |> BD.andThen (processIndefiniteMap config acc)
-
-                FailOnExtra ->
-                    BD.fail (TooManyElements Nothing)
+                                FailOnExtra ->
+                                    BD.fail (TooManyElements Nothing)
+                )
 
 
-processDefiniteMap : Int -> ItemConfig ctx comparable acc a -> acc -> InnerDecoder ctx a
-processDefiniteMap remaining config acc byte =
-    config.keyDecoder byte
-        |> BD.andThen
-            (\key -> u8 |> BD.andThen (processDefiniteItem remaining config acc key))
+processDefiniteEntry : Int -> MapConfig ctx comparable acc a -> acc -> BD.Decoder ctx DecodeError a
+processDefiniteEntry remaining config acc =
+    if remaining <= 0 then
+        finalizeWith config.finalize acc
+
+    else
+        config.keyBD
+            |> BD.andThen
+                (\key ->
+                    case Dict.get key config.handlers of
+                        Just handler ->
+                            handler
+                                |> BD.andThen
+                                    (\update ->
+                                        processDefiniteEntry (remaining - 1) config (update acc)
+                                    )
+
+                        Nothing ->
+                            case config.extra of
+                                IgnoreExtra ->
+                                    skipFullItem
+                                        |> BD.andThen
+                                            (\() ->
+                                                processDefiniteEntry (remaining - 1) config acc
+                                            )
+
+                                FailOnExtra ->
+                                    BD.fail (TooManyElements Nothing)
+                )
 
 
-processDefiniteItem : Int -> ItemConfig ctx comparable acc a -> acc -> comparable -> InnerDecoder ctx a
-processDefiniteItem remaining config acc key byte =
-    let
-        continueWith : acc -> BD.Decoder ctx DecodeError a
-        continueWith newAcc =
-            if remaining <= 1 then
-                finalizeAcc config newAcc
-
-            else
-                u8 |> BD.andThen (processDefiniteMap (remaining - 1) config newAcc)
-    in
-    case Dict.get key config.handlers of
-        Just handler ->
-            handler byte
-                |> BD.andThen (\update -> continueWith (update acc))
-
-        Nothing ->
-            case config.extra of
-                IgnoreExtra ->
-                    skipContent byte
-                        |> BD.andThen (\() -> continueWith acc)
-
-                FailOnExtra ->
-                    BD.fail (TooManyElements Nothing)
-
-
-finalizeAcc : ItemConfig ctx comparable acc a -> acc -> BD.Decoder ctx DecodeError a
-finalizeAcc config acc =
-    case config.finalize acc of
+finalizeWith : (acc -> Maybe a) -> acc -> BD.Decoder ctx DecodeError a
+finalizeWith finalize acc =
+    case finalize acc of
         Just a ->
             BD.succeed a
 
