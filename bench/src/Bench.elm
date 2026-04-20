@@ -15,6 +15,10 @@ module Bench exposing
     , dec_keyed_10_builder, dec_keyed_10_fold
     , dec_keyed_30_keyValue, dec_keyed_30_fold
     , dec_keyed_3_unordered, dec_keyed_10_unordered
+    , dec_item_array100int, dec_item_array100str
+    , dec_item_nested10, dec_item_map50str
+    , dec_itemSkip_array100int, dec_itemSkip_array100str
+    , dec_itemSkip_nested10, dec_itemSkip_map50str
     )
 
 {-| Benchmarks for elm-cardano/cbor performance characteristics.
@@ -135,6 +139,24 @@ elm-bench -f Bench.dec_keyed_30_keyValue -f Bench.dec_keyed_30_fold "()"
 @docs dec_keyed_10_builder, dec_keyed_10_fold
 @docs dec_keyed_30_keyValue, dec_keyed_30_fold
 @docs dec_keyed_3_unordered, dec_keyed_10_unordered
+
+
+# item vs itemSkip
+
+`item` builds the full `CborItem` tree (strings decoded, lists allocated).
+`itemSkip` skips content using `skipBytes` staying entirely in the fast lane.
+
+```sh
+elm-bench -f Bench.dec_item_array100int -f Bench.dec_itemSkip_array100int "()"
+elm-bench -f Bench.dec_item_array100str -f Bench.dec_itemSkip_array100str "()"
+elm-bench -f Bench.dec_item_nested10 -f Bench.dec_itemSkip_nested10 "()"
+elm-bench -f Bench.dec_item_map50str -f Bench.dec_itemSkip_map50str "()"
+```
+
+@docs dec_item_array100int, dec_item_array100str
+@docs dec_item_nested10, dec_item_map50str
+@docs dec_itemSkip_array100int, dec_itemSkip_array100str
+@docs dec_itemSkip_nested10, dec_itemSkip_map50str
 
 -}
 
@@ -877,3 +899,87 @@ dec_keyed_10_unordered () =
     CD.decode decKR10Unordered keyedRecord10Data
         |> Result.toMaybe
         |> Maybe.map (\r -> [ ( 0, r.a ), ( 1, r.b ), ( 2, r.c ), ( 3, r.d ), ( 4, r.e ), ( 5, r.f ), ( 6, r.g ), ( 7, r.h ), ( 8, r.i ), ( 9, r.j ) ])
+
+
+
+-- ============================================================================
+-- 6. ITEM VS ITEM SKIP
+-- ============================================================================
+-- Compares full CborItem decoding (item) vs fast skip (itemSkip).
+--
+-- array100int: 100 small integers (cheapest items — measures overhead)
+-- array100str: 100 × 32-char strings (string decoding is expensive)
+-- nested10:    10-deep nested arrays wrapping an int (recursive structure)
+-- map50str:    map with 50 string→string entries (both keys and values expensive)
+
+
+array100strData : Bytes
+array100strData =
+    CE.encode
+        (CE.list Definite
+            CE.string
+            (List.map (\i -> String.padLeft 32 '0' (String.fromInt i))
+                (List.range 0 99)
+            )
+        )
+
+
+nested10Data : Bytes
+nested10Data =
+    CE.encode (makeNestedArray 10)
+
+
+map50strData : Bytes
+map50strData =
+    CE.encode
+        (CE.map CE.Unsorted
+            Definite
+            (List.map
+                (\i ->
+                    ( CE.string ("key_" ++ String.padLeft 28 '0' (String.fromInt i))
+                    , CE.string ("val_" ++ String.padLeft 28 '0' (String.fromInt i))
+                    )
+                )
+                (List.range 0 49)
+            )
+        )
+
+
+dec_item_array100int : () -> Maybe ()
+dec_item_array100int () =
+    CD.decode CD.item array100Data |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_item_array100str : () -> Maybe ()
+dec_item_array100str () =
+    CD.decode CD.item array100strData |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_item_nested10 : () -> Maybe ()
+dec_item_nested10 () =
+    CD.decode CD.item nested10Data |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_item_map50str : () -> Maybe ()
+dec_item_map50str () =
+    CD.decode CD.item map50strData |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_itemSkip_array100int : () -> Maybe ()
+dec_itemSkip_array100int () =
+    CD.decode (CD.array CD.itemSkip) array100Data |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_itemSkip_array100str : () -> Maybe ()
+dec_itemSkip_array100str () =
+    CD.decode (CD.array CD.itemSkip) array100strData |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_itemSkip_nested10 : () -> Maybe ()
+dec_itemSkip_nested10 () =
+    CD.decode CD.itemSkip nested10Data |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_itemSkip_map50str : () -> Maybe ()
+dec_itemSkip_map50str () =
+    CD.decode (CD.keyValue CD.itemSkip CD.itemSkip) map50strData |> Result.toMaybe |> Maybe.map (\_ -> ())

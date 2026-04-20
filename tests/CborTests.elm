@@ -77,6 +77,7 @@ suite =
         , sequenceTests
         , rawUnsafeTests
         , simpleValueTests
+        , itemSkipTests
         ]
 
 
@@ -1904,4 +1905,95 @@ simpleValueTests =
 
                     other ->
                         Expect.fail ("Expected CborSimple SW8 32, got " ++ Debug.toString other)
+        ]
+
+
+itemSkipTests : Test
+itemSkipTests =
+    describe "Cbor.Decode.itemSkip"
+        [ test "unsigned int (inline)" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "0a"
+                    |> Expect.equal (Ok ())
+        , test "unsigned int (1-byte arg)" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "1818"
+                    |> Expect.equal (Ok ())
+        , test "negative int" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "3863"
+                    |> Expect.equal (Ok ())
+        , test "byte string" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "4401020304"
+                    |> Expect.equal (Ok ())
+        , test "text string" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "6449455446"
+                    |> Expect.equal (Ok ())
+        , test "empty array" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "80"
+                    |> Expect.equal (Ok ())
+        , test "array [1, 2, 3]" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "83010203"
+                    |> Expect.equal (Ok ())
+        , test "nested array [[1], [2, 3]]" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "828101820203"
+                    |> Expect.equal (Ok ())
+        , test "map {1: 2, 3: 4}" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "a201020304"
+                    |> Expect.equal (Ok ())
+        , test "tagged item" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "c11a514b67b0"
+                    |> Expect.equal (Ok ())
+        , test "bool true" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "f5"
+                    |> Expect.equal (Ok ())
+        , test "null" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "f6"
+                    |> Expect.equal (Ok ())
+        , test "float16" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "f93c00"
+                    |> Expect.equal (Ok ())
+        , test "float64" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "fb7e37e43c8800759c"
+                    |> Expect.equal (Ok ())
+        , test "indefinite array" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "9f010203ff"
+                    |> Expect.equal (Ok ())
+        , test "indefinite map" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "bf0102ff"
+                    |> Expect.equal (Ok ())
+        , test "indefinite byte string" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "5f4201024203040fff"
+                    |> Expect.equal (Ok ())
+        , test "simple value" <|
+            \_ ->
+                decodeFromHex CD.itemSkip "e0"
+                    |> Expect.equal (Ok ())
+        , test "skip then decode: array elements" <|
+            \_ ->
+                -- Skip first element, decode second: [1, 1000]
+                let
+                    decoder : CD.CborDecoder ctx Int
+                    decoder =
+                        CD.record (\_ b -> b)
+                            |> CD.element CD.itemSkip
+                            |> CD.element CD.int
+                            |> CD.buildRecord CD.IgnoreExtra
+                in
+                decodeFromHex decoder "821903e81903e8"
+                    |> Expect.equal (Ok 1000)
         ]

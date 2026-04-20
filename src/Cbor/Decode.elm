@@ -9,7 +9,7 @@ module Cbor.Decode exposing
     , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
     , UnorderedRecordBuilder, unorderedRecord, onKey, buildUnorderedRecord
     , arrayHeader, mapHeader
-    , item
+    , item, itemSkip
     )
 
 {-| CBOR decoding combinators.
@@ -80,7 +80,7 @@ Run them with `decode`, or convert to a `Bytes.Decoder.Decoder` with `toBD`.
 
 ## Escape Hatch
 
-@docs item
+@docs item, itemSkip
 
 -}
 
@@ -1692,6 +1692,10 @@ scanEntries remaining keyBD handlers acc extra finalize =
 This is the full CBOR parser. Handles all major types, nested structures,
 tags, indefinite-length containers, etc.
 
+If you need the raw `Bytes` for an item, decoding with `item` then
+re-encoding with `Cbor.Encode.item` is fast enough in practice
+(on par or faster than a dedicated byte-slicing decoder).
+
 -}
 item : CborDecoder ctx CborItem
 item =
@@ -1901,3 +1905,157 @@ itemBody initialByte =
 
         _ ->
             BD.fail (UnknownMajorType majorType)
+
+
+{-| Skip any well-formed CBOR data item without allocating anything.
+
+This is the fastest way to move past a CBOR item. Uses `BD.skipBytes`
+throughout, staying entirely in the fast lane.
+
+-}
+itemSkip : CborDecoder ctx ()
+itemSkip =
+    Item skipContent
+
+
+
+-- FAST SKIP (no counting)
+
+
+{-| Skip the content of a CBOR item (everything after the initial byte).
+Returns () — no byte counting overhead.
+-}
+skipContent : Int -> BD.Decoder ctx DecodeError ()
+skipContent initialByte =
+    let
+        majorType : Int
+        majorType =
+            Bitwise.shiftRightZfBy 5 initialByte
+
+        additionalInfo : Int
+        additionalInfo =
+            Bitwise.and 0x1F initialByte
+    in
+    case majorType of
+        0 ->
+            -- Unsigned integer: skip argument bytes
+            BD.skipBytes (argumentByteCount additionalInfo)
+
+        1 ->
+            -- Negative integer: skip argument bytes
+            BD.skipBytes (argumentByteCount additionalInfo)
+
+        2 ->
+            -- Byte string
+            if additionalInfo == 31 then
+                skipIndefiniteElements
+
+            else
+                withArgument additionalInfo
+                    (\contentLen -> BD.skipBytes contentLen)
+
+        3 ->
+            -- Text string
+            if additionalInfo == 31 then
+                skipIndefiniteElements
+
+            else
+                withArgument additionalInfo
+                    (\contentLen -> BD.skipBytes contentLen)
+
+        4 ->
+            -- Array
+            if additionalInfo == 31 then
+                skipIndefiniteElements
+
+            else
+                withArgument additionalInfo
+                    skipNFullItems
+
+        5 ->
+            -- Map
+            if additionalInfo == 31 then
+                skipIndefiniteElements
+
+            else
+                withArgument additionalInfo
+                    (\count -> skipNFullItems (count * 2))
+
+        6 ->
+            -- Tag: skip argument, then skip tagged item
+            withArgument additionalInfo
+                (\_ -> skipFullItem)
+
+        7 ->
+            -- Simple values and floats
+            if additionalInfo <= 23 then
+                BD.succeed ()
+
+            else if additionalInfo <= 27 then
+                BD.skipBytes (argumentByteCount additionalInfo)
+
+            else
+                BD.fail (ReservedAdditionalInfo additionalInfo)
+
+        _ ->
+            BD.fail (UnknownMajorType majorType)
+
+
+{-| Skip one complete CBOR item (initial byte + content).
+-}
+skipFullItem : BD.Decoder ctx DecodeError ()
+skipFullItem =
+    u8 |> BD.andThen skipContent
+
+
+{-| Skip n complete CBOR items.
+Uses BD.repeat for its optimized fast path (avoids per-iteration decoder construction).
+-}
+skipNFullItems : Int -> BD.Decoder ctx DecodeError ()
+skipNFullItems count =
+    BD.repeat skipFullItem count
+        |> BD.map (\_ -> ())
+
+
+{-| Skip indefinite-length elements (array/map items or byte/text chunks)
+until break byte (0xFF).
+-}
+skipIndefiniteElements : BD.Decoder ctx DecodeError ()
+skipIndefiniteElements =
+    BD.loop
+        (\() ->
+            u8
+                |> BD.andThen
+                    (\byte ->
+                        if byte == 0xFF then
+                            BD.succeed (BD.Done ())
+
+                        else
+                            skipContent byte
+                                |> BD.map (\() -> BD.Loop ())
+                    )
+        )
+        ()
+
+
+{-| How many extra bytes the CBOR argument takes beyond the initial byte.
+-}
+argumentByteCount : Int -> Int
+argumentByteCount additionalInfo =
+    if additionalInfo <= 23 then
+        0
+
+    else if additionalInfo == 24 then
+        1
+
+    else if additionalInfo == 25 then
+        2
+
+    else if additionalInfo == 26 then
+        4
+
+    else if additionalInfo == 27 then
+        8
+
+    else
+        0
