@@ -278,13 +278,13 @@ lengthEquivalenceProperties =
         [ fuzz (Fuzz.list Fuzz.int) "array" <|
             \xs ->
                 let
-                    decoder : BD.Decoder ctx CD.DecodeError (List Int)
+                    decoder : CD.CborDecoder ctx (List Int)
                     decoder =
-                        CD.toBD (CD.array CD.int)
+                        CD.array CD.int
                 in
                 Expect.equal
-                    (BD.decode decoder (CE.encode (CE.list Definite CE.int xs)))
-                    (BD.decode decoder (CE.encode (CE.list Indefinite CE.int xs)))
+                    (CD.decode decoder (CE.encode (CE.list Definite CE.int xs)))
+                    (CD.decode decoder (CE.encode (CE.list Indefinite CE.int xs)))
         , fuzz (Fuzz.list (Fuzz.pair Fuzz.int Fuzz.int)) "map" <|
             \pairs ->
                 let
@@ -296,17 +296,17 @@ lengthEquivalenceProperties =
                     encodeEntries len =
                         CE.map CE.Unsorted len (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique)
 
-                    decoder : BD.Decoder ctx CD.DecodeError (List ( Int, Int ))
+                    decoder : CD.CborDecoder ctx (List ( Int, Int ))
                     decoder =
-                        CD.toBD (CD.keyValue CD.int CD.int)
+                        CD.keyValue CD.int CD.int
 
                     sortResult : Result x (List ( Int, Int )) -> Result x (List ( Int, Int ))
                     sortResult =
                         Result.map (List.sortBy Tuple.first)
                 in
                 Expect.equal
-                    (sortResult (BD.decode decoder (CE.encode (encodeEntries Definite))))
-                    (sortResult (BD.decode decoder (CE.encode (encodeEntries Indefinite))))
+                    (sortResult (CD.decode decoder (CE.encode (encodeEntries Definite))))
+                    (sortResult (CD.decode decoder (CE.encode (encodeEntries Indefinite))))
         , fuzz (Fuzz.list Fuzz.string) "chunked string decodes to concatenation" <|
             \chunks ->
                 CE.encode (CE.stringChunked chunks)
@@ -342,9 +342,9 @@ sortProperties =
                     entries =
                         List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique
 
-                    decoder : BD.Decoder ctx CD.DecodeError (List ( Int, Int ))
+                    decoder : CD.CborDecoder ctx (List ( Int, Int ))
                     decoder =
-                        CD.toBD (CD.keyValue CD.int CD.int)
+                        CD.keyValue CD.int CD.int
 
                     sortResult : Result x (List ( Int, Int )) -> Result x (List ( Int, Int ))
                     sortResult =
@@ -352,15 +352,15 @@ sortProperties =
 
                     detResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
                     detResult =
-                        sortResult (BD.decode decoder (CE.encode (CE.map CE.deterministicSort Definite entries)))
+                        sortResult (CD.decode decoder (CE.encode (CE.map CE.deterministicSort Definite entries)))
 
                     canResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
                     canResult =
-                        sortResult (BD.decode decoder (CE.encode (CE.map CE.canonicalSort Definite entries)))
+                        sortResult (CD.decode decoder (CE.encode (CE.map CE.canonicalSort Definite entries)))
 
                     unsResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
                     unsResult =
-                        sortResult (BD.decode decoder (CE.encode (CE.map CE.Unsorted Definite entries)))
+                        sortResult (CD.decode decoder (CE.encode (CE.map CE.Unsorted Definite entries)))
                 in
                 Expect.all
                     [ \_ -> Expect.equal detResult canResult
