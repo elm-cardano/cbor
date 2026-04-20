@@ -1008,24 +1008,21 @@ decodes the value and returns the updated accumulator.
 
 **Important**: the handler MUST decode exactly one value per call.
 
-The handler returns `BD.Decoder` (not `CborDecoder`) so it can decode
-different value types per key. Use `toBD` to convert value decoders:
-
     handler key acc =
         case key of
             0 ->
-                toBD string |> BD.map (\name -> { acc | name = name })
+                map (\name -> { acc | name = name }) string
 
             1 ->
-                toBD int |> BD.map (\age -> { acc | age = age })
+                map (\age -> { acc | age = age }) int
 
             _ ->
-                toBD item |> BD.map (\_ -> acc)
+                map (\_ -> acc) itemSkip
 
 -}
 foldEntries :
     CborDecoder ctx k
-    -> (k -> acc -> BD.Decoder ctx DecodeError acc)
+    -> (k -> acc -> CborDecoder ctx acc)
     -> acc
     -> CborDecoder ctx acc
 foldEntries keyDecoder handler initialAcc =
@@ -1063,7 +1060,7 @@ foldEntries keyDecoder handler initialAcc =
 
                                                 else
                                                     keyBody byte
-                                                        |> BD.andThen (\key -> handler key acc)
+                                                        |> BD.andThen (\key -> toBD (handler key acc))
                                                         |> BD.map BD.Loop
                                             )
                                 )
@@ -1082,7 +1079,7 @@ foldEntries keyDecoder handler initialAcc =
 
                                     else
                                         keyBD
-                                            |> BD.andThen (\key -> handler key acc)
+                                            |> BD.andThen (\key -> toBD (handler key acc))
                                             |> BD.map (\newAcc -> BD.Loop ( remaining - 1, newAcc ))
                                 )
                                 ( count, initialAcc )

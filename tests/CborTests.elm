@@ -1768,24 +1768,24 @@ foldEntriesTests =
         [ test "definite map sums values" <|
             \_ ->
                 let
-                    handler : Int -> Int -> BD.Decoder () CD.DecodeError Int
+                    handler : Int -> Int -> CD.CborDecoder () Int
                     handler _ acc =
-                        CD.toBD CD.int |> BD.map (\v -> acc + v)
+                        CD.map (\v -> acc + v) CD.int
                 in
                 decodeFromHex (CD.foldEntries CD.int handler 0) "a201020304"
                     |> Expect.equal (Ok 6)
         , test "empty map" <|
             \_ ->
                 decodeFromHex
-                    (CD.foldEntries CD.int (\_ acc -> CD.toBD CD.int |> BD.map (\v -> acc + v)) 0)
+                    (CD.foldEntries CD.int (\_ acc -> CD.map (\v -> acc + v) CD.int) 0)
                     "a0"
                     |> Expect.equal (Ok 0)
         , test "indefinite map" <|
             \_ ->
                 let
-                    handler : Int -> Int -> BD.Decoder () CD.DecodeError Int
+                    handler : Int -> Int -> CD.CborDecoder () Int
                     handler _ acc =
-                        CD.toBD CD.int |> BD.map (\v -> acc + v)
+                        CD.map (\v -> acc + v) CD.int
                 in
                 decodeFromHex (CD.foldEntries CD.int handler 0) "bf01020304ff"
                     |> Expect.equal (Ok 6)
@@ -1803,17 +1803,17 @@ foldEntriesTests =
                                 ]
                             )
 
-                    handler : Int -> Person -> BD.Decoder () CD.DecodeError Person
+                    handler : Int -> Person -> CD.CborDecoder () Person
                     handler key acc =
                         case key of
                             0 ->
-                                CD.toBD CD.string |> BD.map (\name -> { acc | name = name })
+                                CD.map (\name -> { acc | name = name }) CD.string
 
                             1 ->
-                                CD.toBD CD.int |> BD.map (\age -> { acc | age = age })
+                                CD.map (\age -> { acc | age = age }) CD.int
 
                             _ ->
-                                CD.toBD CD.item |> BD.map (\_ -> acc)
+                                CD.map (\_ -> acc) CD.itemSkip
                 in
                 CD.decode (CD.foldEntries CD.int handler { name = "", age = 0 }) encoded
                     |> Expect.equal (Ok { name = "Alice", age = 30 })

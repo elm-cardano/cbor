@@ -527,13 +527,8 @@ decKR10Builder =
 
 decFold : CD.CborDecoder ctx (List ( Int, Int ))
 decFold =
-    let
-        intBD : BD.Decoder ctx CD.DecodeError Int
-        intBD =
-            CD.toBD CD.int
-    in
     CD.foldEntries CD.int
-        (\key acc -> intBD |> BD.map (\v -> ( key, v ) :: acc))
+        (\key acc -> CD.int |> CD.map (\v -> ( key, v ) :: acc))
         []
         |> CD.map List.reverse
 
