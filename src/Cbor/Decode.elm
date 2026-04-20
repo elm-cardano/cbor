@@ -1151,28 +1151,30 @@ indefinite-length.
 -}
 mapHeader : CborDecoder ctx (Maybe Int)
 mapHeader =
-    Item
-        (\initialByte ->
-            let
-                majorType : Int
-                majorType =
-                    Bitwise.shiftRightZfBy 5 initialByte
-            in
-            if majorType /= 5 then
-                BD.fail (WrongMajorType { expected = 5, got = majorType })
+    Item mapHeaderInner
 
-            else
-                let
-                    additionalInfo : Int
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
-                in
-                if additionalInfo == 31 then
-                    BD.succeed Nothing
 
-                else
-                    withArgument additionalInfo (Just >> BD.succeed)
-        )
+mapHeaderInner : InnerDecoder ctx (Maybe Int)
+mapHeaderInner initialByte =
+    let
+        majorType : Int
+        majorType =
+            Bitwise.shiftRightZfBy 5 initialByte
+    in
+    if majorType /= 5 then
+        BD.fail (WrongMajorType { expected = 5, got = majorType })
+
+    else
+        let
+            additionalInfo : Int
+            additionalInfo =
+                Bitwise.and 0x1F initialByte
+        in
+        if additionalInfo == 31 then
+            BD.succeed Nothing
+
+        else
+            withArgument additionalInfo (Just >> BD.succeed)
 
 
 
@@ -1228,7 +1230,8 @@ element valueDecoder builder =
 
                                 else if rem < 0 then
                                     -- Indefinite mode: check for break byte
-                                    readItemOrBreak valueDecoder
+                                    u8
+                                        |> BD.andThen (breakOrRead valueDecoder)
                                         |> BD.andThen
                                             (\maybeV ->
                                                 case maybeV of
@@ -1272,7 +1275,8 @@ optionalElement valueDecoder default builder =
 
                         else if rem < 0 then
                             -- Indefinite mode: check for break byte
-                            readItemOrBreak valueDecoder
+                            u8
+                                |> BD.andThen (breakOrRead valueDecoder)
                                 |> BD.andThen
                                     (\maybeV ->
                                         case maybeV of
@@ -1491,7 +1495,8 @@ required expectedKey valueDecoder (KeyedRecordBuilder keyDecoder displayKey inne
 
                                 else if state.remaining < 0 then
                                     -- IndefiniteLength
-                                    readItemOrBreak keyDecoder
+                                    u8
+                                        |> BD.andThen (breakOrRead keyDecoder)
                                         |> BD.andThen
                                             (\maybeKey ->
                                                 case maybeKey of
@@ -1565,7 +1570,8 @@ optional expectedKey valueDecoder default (KeyedRecordBuilder keyDecoder display
                                 Nothing ->
                                     if state.remaining < 0 then
                                         -- IndefiniteLength
-                                        readItemOrBreak keyDecoder
+                                        u8
+                                            |> BD.andThen (breakOrRead keyDecoder)
                                             |> BD.andThen
                                                 (\maybeKey ->
                                                     case maybeKey of
@@ -1686,7 +1692,7 @@ function, since the constructor-threading pattern requires ordered application.
 
 -}
 type UnorderedRecordBuilder ctx comparable acc
-    = UnorderedRecordBuilder (CborDecoder ctx comparable) acc (Dict comparable (BD.Decoder ctx DecodeError (acc -> acc)))
+    = UnorderedRecordBuilder (CborDecoder ctx comparable) acc (Dict comparable (InnerDecoder ctx (acc -> acc)))
 
 
 {-| Start building an unordered record decoder.
@@ -1718,7 +1724,7 @@ onKey : comparable -> CborDecoder ctx v -> (v -> acc -> acc) -> UnorderedRecordB
 onKey key valueDecoder setter (UnorderedRecordBuilder keyDecoder init handlers) =
     UnorderedRecordBuilder keyDecoder
         init
-        (Dict.insert key (toBD valueDecoder |> BD.map setter) handlers)
+        (Dict.insert key (\byte -> unwrap valueDecoder byte |> BD.map setter) handlers)
 
 
 {-| Finalize an unordered record builder into a decoder.
@@ -1734,102 +1740,127 @@ Safe for typical CBOR maps (up to a few hundred entries).
 buildUnorderedRecord : ExtraElements -> (acc -> Maybe a) -> UnorderedRecordBuilder ctx comparable acc -> CborDecoder ctx a
 buildUnorderedRecord extra finalize (UnorderedRecordBuilder keyDecoder init handlers) =
     let
-        keyBD : BD.Decoder ctx DecodeError comparable
-        keyBD =
-            toBD keyDecoder
+        config : ItemConfig ctx comparable acc a
+        config =
+            ItemConfig extra handlers finalize (unwrap keyDecoder)
     in
-    mapHeader
-        |> andThen
-            (\maybeN ->
-                case maybeN of
-                    Just n ->
-                        Pure (scanEntries n keyBD handlers init extra finalize)
+    Item
+        (\byte ->
+            mapHeaderInner byte
+                |> BD.andThen
+                    (\maybeN ->
+                        case maybeN of
+                            Just n ->
+                                if n == 0 then
+                                    finalizeAcc config init
 
-                    Nothing ->
-                        -- IndefiniteLength
-                        Pure (scanIndefiniteEntries keyDecoder handlers init extra finalize)
-            )
+                                else
+                                    u8 |> BD.andThen (processDefiniteMap n config init)
 
-
-{-| Recursive through BD.andThen rather than BD.loop to avoid per-iteration
-tuple + Step wrapper allocations (~25% faster at 10 entries). The trade-off
-is O(N) stack depth (2 frames per entry), which is fine for typical CBOR maps
-but would overflow on maps with thousands of entries.
--}
-scanEntries : Int -> BD.Decoder ctx DecodeError comparable -> Dict comparable (BD.Decoder ctx DecodeError (acc -> acc)) -> acc -> ExtraElements -> (acc -> Maybe a) -> BD.Decoder ctx DecodeError a
-scanEntries remaining keyBD handlers acc extra finalize =
-    if remaining == 0 then
-        case finalize acc of
-            Just a ->
-                BD.succeed a
-
-            Nothing ->
-                BD.fail FailedToFinalizeRecord
-
-    else
-        keyBD
-            |> BD.andThen
-                (\key ->
-                    case Dict.get key handlers of
-                        Just handler ->
-                            handler
-                                |> BD.andThen
-                                    (\update ->
-                                        scanEntries (remaining - 1) keyBD handlers (update acc) extra finalize
-                                    )
-
-                        Nothing ->
-                            case extra of
-                                IgnoreExtra ->
-                                    skipFullItem
-                                        |> BD.andThen
-                                            (\() ->
-                                                scanEntries (remaining - 1) keyBD handlers acc extra finalize
-                                            )
-
-                                FailOnExtra ->
-                                    BD.fail (TooManyElements Nothing)
-                )
+                            Nothing ->
+                                u8 |> BD.andThen (processIndefiniteMap config init)
+                    )
+        )
 
 
-{-| Like scanEntries but for indefinite-length maps.
-Uses readItemOrBreak to check for break (0xFF) before each key.
--}
-scanIndefiniteEntries : CborDecoder ctx comparable -> Dict comparable (BD.Decoder ctx DecodeError (acc -> acc)) -> acc -> ExtraElements -> (acc -> Maybe a) -> BD.Decoder ctx DecodeError a
-scanIndefiniteEntries keyDecoder handlers acc extra finalize =
-    readItemOrBreak keyDecoder
+unwrap : CborDecoder context value -> InnerDecoder context value
+unwrap decoder =
+    case decoder of
+        Item inner ->
+            inner
+
+        _ ->
+            \_ -> BD.fail ForbiddenPureInCollection
+
+
+type alias InnerDecoder ctx a =
+    Int -> BD.Decoder ctx DecodeError a
+
+
+type alias ItemConfig ctx comparable acc a =
+    { extra : ExtraElements
+    , handlers : Dict comparable (InnerDecoder ctx (acc -> acc))
+    , finalize : acc -> Maybe a
+    , keyDecoder : InnerDecoder ctx comparable
+    }
+
+
+processIndefiniteMap : ItemConfig ctx comparable acc a -> acc -> InnerDecoder ctx a
+processIndefiniteMap config acc byte =
+    case byte of
+        0xFF ->
+            case config.finalize acc of
+                Just a ->
+                    BD.succeed a
+
+                Nothing ->
+                    BD.fail FailedToFinalizeRecord
+
+        _ ->
+            config.keyDecoder byte
+                |> BD.andThen
+                    (\key -> u8 |> BD.andThen (processIndefiniteItem config acc key))
+
+
+processIndefiniteItem : ItemConfig ctx comparable acc a -> acc -> comparable -> Int -> BD.Decoder ctx DecodeError a
+processIndefiniteItem config acc key byte =
+    case Dict.get key config.handlers of
+        Just handler ->
+            handler byte
+                |> BD.andThen (\update -> u8 |> BD.andThen (processIndefiniteMap config (update acc)))
+
+        Nothing ->
+            case config.extra of
+                IgnoreExtra ->
+                    skipContent byte
+                        |> BD.andThen (\() -> u8)
+                        |> BD.andThen (processIndefiniteMap config acc)
+
+                FailOnExtra ->
+                    BD.fail (TooManyElements Nothing)
+
+
+processDefiniteMap : Int -> ItemConfig ctx comparable acc a -> acc -> InnerDecoder ctx a
+processDefiniteMap remaining config acc byte =
+    config.keyDecoder byte
         |> BD.andThen
-            (\maybeKey ->
-                case maybeKey of
-                    Nothing ->
-                        case finalize acc of
-                            Just a ->
-                                BD.succeed a
+            (\key -> u8 |> BD.andThen (processDefiniteItem remaining config acc key))
 
-                            Nothing ->
-                                BD.fail FailedToFinalizeRecord
 
-                    Just key ->
-                        case Dict.get key handlers of
-                            Just handler ->
-                                handler
-                                    |> BD.andThen
-                                        (\update ->
-                                            scanIndefiniteEntries keyDecoder handlers (update acc) extra finalize
-                                        )
+processDefiniteItem : Int -> ItemConfig ctx comparable acc a -> acc -> comparable -> InnerDecoder ctx a
+processDefiniteItem remaining config acc key byte =
+    let
+        continueWith : acc -> BD.Decoder ctx DecodeError a
+        continueWith newAcc =
+            if remaining <= 1 then
+                finalizeAcc config newAcc
 
-                            Nothing ->
-                                case extra of
-                                    IgnoreExtra ->
-                                        skipFullItem
-                                            |> BD.andThen
-                                                (\() ->
-                                                    scanIndefiniteEntries keyDecoder handlers acc extra finalize
-                                                )
+            else
+                u8 |> BD.andThen (processDefiniteMap (remaining - 1) config newAcc)
+    in
+    case Dict.get key config.handlers of
+        Just handler ->
+            handler byte
+                |> BD.andThen (\update -> continueWith (update acc))
 
-                                    FailOnExtra ->
-                                        BD.fail (TooManyElements Nothing)
-            )
+        Nothing ->
+            case config.extra of
+                IgnoreExtra ->
+                    skipContent byte
+                        |> BD.andThen (\() -> continueWith acc)
+
+                FailOnExtra ->
+                    BD.fail (TooManyElements Nothing)
+
+
+finalizeAcc : ItemConfig ctx comparable acc a -> acc -> BD.Decoder ctx DecodeError a
+finalizeAcc config acc =
+    case config.finalize acc of
+        Just a ->
+            BD.succeed a
+
+        Nothing ->
+            BD.fail FailedToFinalizeRecord
 
 
 
@@ -2187,26 +2218,24 @@ skipIndefiniteElements =
         ()
 
 
-{-| Read the next byte. If it's the break byte (0xFF), succeed with Nothing.
-Otherwise, pass it to the Item body and return Just the result.
-Used for indefinite-length container support.
--}
-readItemOrBreak : CborDecoder ctx a -> BD.Decoder ctx DecodeError (Maybe a)
-readItemOrBreak decoder =
+breakOrRead : CborDecoder ctx a -> Int -> BD.Decoder ctx DecodeError (Maybe a)
+breakOrRead decoder byte =
+    if byte == 0xFF then
+        BD.succeed Nothing
+
+    else
+        forceRead decoder byte
+            |> BD.map Just
+
+
+forceRead : CborDecoder context value -> Int -> BD.Decoder context DecodeError value
+forceRead decoder byte =
     case decoder of
         Item body ->
-            u8
-                |> BD.andThen
-                    (\byte ->
-                        if byte == 0xFF then
-                            BD.succeed Nothing
+            body byte
 
-                        else
-                            body byte |> BD.map Just
-                    )
-
-        Pure dec ->
-            dec |> BD.map Just
+        Pure _ ->
+            BD.fail ForbiddenPureInCollection
 
 
 {-| Expect the break byte (0xFF) next in the stream.
