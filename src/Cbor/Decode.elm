@@ -1692,7 +1692,7 @@ function, since the constructor-threading pattern requires ordered application.
 
 -}
 type UnorderedRecordBuilder ctx comparable acc
-    = UnorderedRecordBuilder (CborDecoder ctx comparable) acc (Dict comparable (InnerDecoder ctx (acc -> acc)))
+    = UnorderedRecordBuilder (CborDecoder ctx comparable) acc (Dict comparable (BD.Decoder ctx DecodeError (acc -> acc)))
 
 
 {-| Start building an unordered record decoder.
@@ -1722,9 +1722,19 @@ and the setter updates the accumulator.
 -}
 onKey : comparable -> CborDecoder ctx v -> (v -> acc -> acc) -> UnorderedRecordBuilder ctx comparable acc -> UnorderedRecordBuilder ctx comparable acc
 onKey key valueDecoder setter (UnorderedRecordBuilder keyDecoder init handlers) =
+    let
+        handlerBD : BD.Decoder ctx DecodeError (acc -> acc)
+        handlerBD =
+            case valueDecoder of
+                Item body ->
+                    u8 |> BD.andThen body |> BD.map setter
+
+                Pure _ ->
+                    BD.fail ForbiddenPureInCollection
+    in
     UnorderedRecordBuilder keyDecoder
         init
-        (Dict.insert key (\byte -> unwrap valueDecoder byte |> BD.map setter) handlers)
+        (Dict.insert key handlerBD handlers)
 
 
 {-| Finalize an unordered record builder into a decoder.
@@ -1747,7 +1757,7 @@ buildUnorderedRecord extra finalize (UnorderedRecordBuilder keyDecoder init hand
         config : MapConfig ctx comparable acc a
         config =
             { extra = extra
-            , handlers = Dict.map (\_ h -> u8 |> BD.andThen h) handlers
+            , handlers = handlers
             , finalize = finalize
             , keyBD = u8 |> BD.andThen keyInner
             , keyInner = keyInner
