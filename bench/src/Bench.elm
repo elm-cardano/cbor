@@ -14,6 +14,7 @@ module Bench exposing
     , dec_keyed_3_builder, dec_keyed_3_fold
     , dec_keyed_10_builder, dec_keyed_10_fold
     , dec_keyed_30_keyValue, dec_keyed_30_fold
+    , dec_keyed_3_unordered, dec_keyed_10_unordered
     )
 
 {-| Benchmarks for elm-cardano/cbor performance characteristics.
@@ -125,14 +126,15 @@ elm-bench -f Bench.dec_record_30_array "()"
 `keyValue` = `CD.keyValue` (pair decoder loop).
 
 ```sh
-elm-bench -f Bench.dec_keyed_3_builder -f Bench.dec_keyed_3_fold "()"
-elm-bench -f Bench.dec_keyed_10_builder -f Bench.dec_keyed_10_fold "()"
+elm-bench -f Bench.dec_keyed_3_builder -f Bench.dec_keyed_3_fold -f Bench.dec_keyed_3_unordered "()"
+elm-bench -f Bench.dec_keyed_10_builder -f Bench.dec_keyed_10_fold -f Bench.dec_keyed_10_unordered "()"
 elm-bench -f Bench.dec_keyed_30_keyValue -f Bench.dec_keyed_30_fold "()"
 ```
 
 @docs dec_keyed_3_builder, dec_keyed_3_fold
 @docs dec_keyed_10_builder, dec_keyed_10_fold
 @docs dec_keyed_30_keyValue, dec_keyed_30_fold
+@docs dec_keyed_3_unordered, dec_keyed_10_unordered
 
 -}
 
@@ -515,6 +517,112 @@ decFold =
 
 
 
+-- Unordered record decoders (Dict-based dispatch)
+
+
+type alias R3Acc =
+    { a : Maybe Int, b : Maybe Int, c : Maybe Int }
+
+
+type alias R10Acc =
+    { a : Maybe Int
+    , b : Maybe Int
+    , c : Maybe Int
+    , d : Maybe Int
+    , e : Maybe Int
+    , f : Maybe Int
+    , g : Maybe Int
+    , h : Maybe Int
+    , i : Maybe Int
+    , j : Maybe Int
+    }
+
+
+decKR3Unordered : CD.CborDecoder ctx R3
+decKR3Unordered =
+    CD.unorderedRecord CD.int { a = Nothing, b = Nothing, c = Nothing }
+        |> CD.onKey 0 CD.int (\v acc -> { acc | a = Just v })
+        |> CD.onKey 1 CD.int (\v acc -> { acc | b = Just v })
+        |> CD.onKey 2 CD.int (\v acc -> { acc | c = Just v })
+        |> CD.buildUnorderedRecord CD.IgnoreExtra
+            (\acc -> Maybe.map3 R3 acc.a acc.b acc.c)
+
+
+decKR10Unordered : CD.CborDecoder ctx R10
+decKR10Unordered =
+    CD.unorderedRecord CD.int
+        { a = Nothing, b = Nothing, c = Nothing, d = Nothing, e = Nothing, f = Nothing, g = Nothing, h = Nothing, i = Nothing, j = Nothing }
+        |> CD.onKey 0 CD.int setMaybeA
+        |> CD.onKey 1 CD.int setMaybeB
+        |> CD.onKey 2 CD.int setMaybeC
+        |> CD.onKey 3 CD.int setMaybeD
+        |> CD.onKey 4 CD.int setMaybeE
+        |> CD.onKey 5 CD.int setMaybeF
+        |> CD.onKey 6 CD.int setMaybeG
+        |> CD.onKey 7 CD.int setMaybeH
+        |> CD.onKey 8 CD.int setMaybeI
+        |> CD.onKey 9 CD.int setMaybeJ
+        |> CD.buildUnorderedRecord CD.IgnoreExtra
+            (\acc ->
+                Maybe.map5 (\a b c d e -> R10 a b c d e)
+                    acc.a
+                    acc.b
+                    acc.c
+                    acc.d
+                    acc.e
+                    |> Maybe.andThen
+                        (\partial ->
+                            Maybe.map5 (\f g h i j -> partial f g h i j)
+                                acc.f
+                                acc.g
+                                acc.h
+                                acc.i
+                                acc.j
+                        )
+            )
+
+
+setMaybeA v acc =
+    { a = Just v, b = acc.b, c = acc.c, d = acc.d, e = acc.e, f = acc.f, g = acc.g, h = acc.h, i = acc.i, j = acc.i }
+
+
+setMaybeB v acc =
+    { a = acc.a, b = Just v, c = acc.c, d = acc.d, e = acc.e, f = acc.f, g = acc.g, h = acc.h, i = acc.i, j = acc.i }
+
+
+setMaybeC v acc =
+    { a = acc.a, b = acc.b, c = Just v, d = acc.d, e = acc.e, f = acc.f, g = acc.g, h = acc.h, i = acc.i, j = acc.i }
+
+
+setMaybeD v acc =
+    { a = acc.a, b = acc.b, c = acc.c, d = Just v, e = acc.e, f = acc.f, g = acc.g, h = acc.h, i = acc.i, j = acc.i }
+
+
+setMaybeE v acc =
+    { a = acc.a, b = acc.b, c = acc.c, d = acc.d, e = Just v, f = acc.f, g = acc.g, h = acc.h, i = acc.i, j = acc.i }
+
+
+setMaybeF v acc =
+    { a = acc.a, b = acc.b, c = acc.c, d = acc.d, e = acc.e, f = Just v, g = acc.g, h = acc.h, i = acc.i, j = acc.i }
+
+
+setMaybeG v acc =
+    { a = acc.a, b = acc.b, c = acc.c, d = acc.d, e = acc.e, f = acc.f, g = Just v, h = acc.h, i = acc.i, j = acc.i }
+
+
+setMaybeH v acc =
+    { a = acc.a, b = acc.b, c = acc.c, d = acc.d, e = acc.e, f = acc.f, g = acc.g, h = Just v, i = acc.i, j = acc.i }
+
+
+setMaybeI v acc =
+    { a = acc.a, b = acc.b, c = acc.c, d = acc.d, e = acc.e, f = acc.f, g = acc.g, h = acc.h, i = Just v, j = acc.i }
+
+
+setMaybeJ v acc =
+    { a = acc.a, b = acc.b, c = acc.c, d = acc.d, e = acc.e, f = acc.f, g = acc.g, h = acc.h, i = acc.i, j = Just v }
+
+
+
 -- ============================================================================
 -- 1. MAP KEY SORTING COST
 -- ============================================================================
@@ -755,3 +863,17 @@ dec_keyed_30_keyValue () =
 dec_keyed_30_fold : () -> Maybe (List ( Int, Int ))
 dec_keyed_30_fold () =
     CD.decode decFold keyedRecord30Data |> Result.toMaybe
+
+
+dec_keyed_3_unordered : () -> Maybe (List ( Int, Int ))
+dec_keyed_3_unordered () =
+    CD.decode decKR3Unordered keyedRecord3Data
+        |> Result.toMaybe
+        |> Maybe.map (\r -> [ ( 0, r.a ), ( 1, r.b ), ( 2, r.c ) ])
+
+
+dec_keyed_10_unordered : () -> Maybe (List ( Int, Int ))
+dec_keyed_10_unordered () =
+    CD.decode decKR10Unordered keyedRecord10Data
+        |> Result.toMaybe
+        |> Maybe.map (\r -> [ ( 0, r.a ), ( 1, r.b ), ( 2, r.c ), ( 3, r.d ), ( 4, r.e ), ( 5, r.f ), ( 6, r.g ), ( 7, r.h ), ( 8, r.i ), ( 9, r.j ) ])

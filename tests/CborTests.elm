@@ -73,6 +73,7 @@ suite =
         , bigIntTests
         , foldEntriesTests
         , fieldTests
+        , unorderedRecordBuilderTests
         , sequenceTests
         , rawUnsafeTests
         , simpleValueTests
@@ -1119,6 +1120,134 @@ keyedRecordBuilderTests =
                             |> CD.required 1 CD.int
                             |> CD.optional 2 CD.string ""
                             |> CD.buildKeyedRecord CD.IgnoreExtra
+                in
+                CD.decode decoder encoded
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        ]
+
+
+
+-- UNORDERED RECORD BUILDER TESTS
+
+
+unorderedRecordBuilderTests : Test
+unorderedRecordBuilderTests =
+    describe "Unordered record builder"
+        [ test "keys in declared order" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 1, CE.int 30 )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.unorderedRecord CD.int { name = Nothing, age = Nothing }
+                            |> CD.onKey 0 CD.string (\v acc -> { acc | name = Just v })
+                            |> CD.onKey 1 CD.int (\v acc -> { acc | age = Just v })
+                            |> CD.buildUnorderedRecord CD.IgnoreExtra
+                                (\acc -> Maybe.map2 Person acc.name acc.age)
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Alice", age = 30 })
+        , test "keys in reverse order" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
+                                [ ( CE.int 1, CE.int 25 )
+                                , ( CE.int 0, CE.string "Bob" )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.unorderedRecord CD.int { name = Nothing, age = Nothing }
+                            |> CD.onKey 0 CD.string (\v acc -> { acc | name = Just v })
+                            |> CD.onKey 1 CD.int (\v acc -> { acc | age = Just v })
+                            |> CD.buildUnorderedRecord CD.IgnoreExtra
+                                (\acc -> Maybe.map2 Person acc.name acc.age)
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Bob", age = 25 })
+        , test "extra keys ignored with IgnoreExtra" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
+                                [ ( CE.int 0, CE.string "Charlie" )
+                                , ( CE.int 99, CE.string "extra" )
+                                , ( CE.int 1, CE.int 40 )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.unorderedRecord CD.int { name = Nothing, age = Nothing }
+                            |> CD.onKey 0 CD.string (\v acc -> { acc | name = Just v })
+                            |> CD.onKey 1 CD.int (\v acc -> { acc | age = Just v })
+                            |> CD.buildUnorderedRecord CD.IgnoreExtra
+                                (\acc -> Maybe.map2 Person acc.name acc.age)
+                in
+                CD.decode decoder encoded
+                    |> Expect.equal (Ok { name = "Charlie", age = 40 })
+        , test "extra keys rejected with FailOnExtra" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                , ( CE.int 99, CE.string "extra" )
+                                , ( CE.int 1, CE.int 30 )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.unorderedRecord CD.int { name = Nothing, age = Nothing }
+                            |> CD.onKey 0 CD.string (\v acc -> { acc | name = Just v })
+                            |> CD.onKey 1 CD.int (\v acc -> { acc | age = Just v })
+                            |> CD.buildUnorderedRecord CD.FailOnExtra
+                                (\acc -> Maybe.map2 Person acc.name acc.age)
+                in
+                CD.decode decoder encoded
+                    |> Result.toMaybe
+                    |> Expect.equal Nothing
+        , test "missing required field fails" <|
+            \_ ->
+                let
+                    encoded : Bytes.Bytes
+                    encoded =
+                        CE.encode
+                            (CE.map CE.Unsorted
+                                Definite
+                                [ ( CE.int 0, CE.string "Alice" )
+                                ]
+                            )
+
+                    decoder : CD.CborDecoder () Person
+                    decoder =
+                        CD.unorderedRecord CD.int { name = Nothing, age = Nothing }
+                            |> CD.onKey 0 CD.string (\v acc -> { acc | name = Just v })
+                            |> CD.onKey 1 CD.int (\v acc -> { acc | age = Just v })
+                            |> CD.buildUnorderedRecord CD.IgnoreExtra
+                                (\acc -> Maybe.map2 Person acc.name acc.age)
                 in
                 CD.decode decoder encoded
                     |> Result.toMaybe

@@ -7,6 +7,7 @@ module Cbor.Decode exposing
     , array, keyValue, field, foldEntries, tag
     , RecordBuilder, record, element, optionalElement, ExtraElements(..), buildRecord
     , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
+    , UnorderedRecordBuilder, unorderedRecord, onKey, buildUnorderedRecord
     , arrayHeader, mapHeader
     , item
     )
@@ -67,6 +68,11 @@ Run them with `decode`, or convert to a `Bytes.Decoder.Decoder` with `toBD`.
 @docs KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
 
 
+## Unordered Record Builder (CBOR maps → Elm values, any key order)
+
+@docs UnorderedRecordBuilder, unorderedRecord, onKey, buildUnorderedRecord
+
+
 ## Structure Headers
 
 @docs arrayHeader, mapHeader
@@ -83,6 +89,7 @@ import Bytes
 import Bytes.Decoder as BD
 import Bytes.Encode
 import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), tagToInt)
+import Dict exposing (Dict)
 
 
 
@@ -1551,6 +1558,129 @@ buildKeyedRecord extra (KeyedRecordBuilder _ decoder) =
                     Nothing ->
                         fail IndefiniteLengthNotSupported
             )
+
+
+
+-- UNORDERED RECORD BUILDER
+
+
+{-| Builder for decoding CBOR maps into records regardless of key order.
+
+Unlike `KeyedRecordBuilder` which requires keys in the declared order,
+this builder uses a `Dict` to dispatch on each key. Unknown keys are
+handled according to the `ExtraElements` policy.
+
+The trade-off: the caller must define an accumulator type and a finalize
+function, since the constructor-threading pattern requires ordered application.
+
+-}
+type UnorderedRecordBuilder ctx comparable acc
+    = UnorderedRecordBuilder (CborDecoder ctx comparable) acc (Dict comparable (BD.Decoder ctx DecodeError (acc -> acc)))
+
+
+{-| Start building an unordered record decoder.
+
+    type alias PersonAcc =
+        { name : Maybe String, age : Maybe Int }
+
+    decodePerson : CborDecoder ctx Person
+    decodePerson =
+        unorderedRecord int { name = Nothing, age = Nothing }
+            |> onKey 0 string (\v acc -> { acc | name = Just v })
+            |> onKey 1 int (\v acc -> { acc | age = Just v })
+            |> buildUnorderedRecord IgnoreExtra
+                (\acc -> Maybe.map2 Person acc.name acc.age)
+
+-}
+unorderedRecord : CborDecoder ctx comparable -> acc -> UnorderedRecordBuilder ctx comparable acc
+unorderedRecord keyDecoder init =
+    UnorderedRecordBuilder keyDecoder init Dict.empty
+
+
+{-| Register a field handler for a specific key.
+
+When the key is encountered during decoding, the value decoder runs
+and the setter updates the accumulator.
+
+-}
+onKey : comparable -> CborDecoder ctx v -> (v -> acc -> acc) -> UnorderedRecordBuilder ctx comparable acc -> UnorderedRecordBuilder ctx comparable acc
+onKey key valueDecoder setter (UnorderedRecordBuilder keyDecoder init handlers) =
+    UnorderedRecordBuilder keyDecoder
+        init
+        (Dict.insert key (toBD valueDecoder |> BD.map setter) handlers)
+
+
+{-| Finalize an unordered record builder into a decoder.
+
+Reads the map header, scans all entries dispatching to registered handlers,
+then calls the finalize function. If finalize returns `Nothing`, decoding
+fails with `TooFewElements`.
+
+**Note:** uses O(N) stack depth where N is the number of map entries.
+Safe for typical CBOR maps (up to a few hundred entries).
+
+-}
+buildUnorderedRecord : ExtraElements -> (acc -> Maybe a) -> UnorderedRecordBuilder ctx comparable acc -> CborDecoder ctx a
+buildUnorderedRecord extra finalize (UnorderedRecordBuilder keyDecoder init handlers) =
+    let
+        keyBD : BD.Decoder ctx DecodeError comparable
+        keyBD =
+            toBD keyDecoder
+    in
+    mapHeader
+        |> andThen
+            (\maybeN ->
+                case maybeN of
+                    Just n ->
+                        Pure (scanEntries n keyBD handlers init extra finalize)
+
+                    Nothing ->
+                        fail IndefiniteLengthNotSupported
+            )
+
+
+
+{- Recursive through BD.andThen rather than BD.loop to avoid per-iteration
+   tuple + Step wrapper allocations (~25% faster at 10 entries). The trade-off
+   is O(N) stack depth (2 frames per entry), which is fine for typical CBOR maps
+   but would overflow on maps with thousands of entries.
+-}
+
+
+scanEntries : Int -> BD.Decoder ctx DecodeError comparable -> Dict comparable (BD.Decoder ctx DecodeError (acc -> acc)) -> acc -> ExtraElements -> (acc -> Maybe a) -> BD.Decoder ctx DecodeError a
+scanEntries remaining keyBD handlers acc extra finalize =
+    if remaining <= 0 then
+        case finalize acc of
+            Just a ->
+                BD.succeed a
+
+            Nothing ->
+                BD.fail TooFewElements
+
+    else
+        keyBD
+            |> BD.andThen
+                (\key ->
+                    case Dict.get key handlers of
+                        Just handler ->
+                            handler
+                                |> BD.andThen
+                                    (\update ->
+                                        scanEntries (remaining - 1) keyBD handlers (update acc) extra finalize
+                                    )
+
+                        Nothing ->
+                            case extra of
+                                IgnoreExtra ->
+                                    itemBD
+                                        |> BD.andThen
+                                            (\_ ->
+                                                scanEntries (remaining - 1) keyBD handlers acc extra finalize
+                                            )
+
+                                FailOnExtra ->
+                                    BD.fail TooManyElements
+                )
 
 
 
