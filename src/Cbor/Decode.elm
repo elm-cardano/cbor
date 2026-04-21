@@ -712,48 +712,46 @@ buildRecord extra builder =
                 (\maybeN ->
                     case maybeN of
                         Just n ->
-                            Pure
-                                (decoder n
-                                    |> BD.andThen
-                                        (\( rem, value ) ->
-                                            if rem == 0 then
-                                                BD.succeed value
-
-                                            else
-                                                case extra of
-                                                    IgnoreExtra ->
-                                                        Inner.skipNFull rem
-                                                            |> BD.map (\_ -> value)
-
-                                                    FailOnExtra ->
-                                                        BD.fail (TooManyElements Nothing)
-                                        )
-                                )
+                            Pure (decoder n |> BD.andThen (finalizeCountedDefinite extra))
 
                         Nothing ->
-                            Pure
-                                (decoder -1
-                                    |> BD.andThen
-                                        (\( rem, value ) ->
-                                            if rem == 0 then
-                                                -- Break was consumed by optionalElement
-                                                BD.succeed value
-
-                                            else
-                                                -- rem < 0: indefinite, need to consume remaining entries
-                                                case extra of
-                                                    IgnoreExtra ->
-                                                        Inner.skipIndefinite
-                                                            |> BD.map (\_ -> value)
-
-                                                    FailOnExtra ->
-                                                        u8
-                                                            |> BD.andThen Inner.expectBreak
-                                                            |> BD.map (\_ -> value)
-                                        )
-                                )
+                            Pure (decoder -1 |> BD.andThen (finalizeCountedIndefinite extra))
                 )
                 arrayHeader
+
+
+finalizeCountedDefinite : ExtraElements -> ( Int, a ) -> BD.Decoder ctx DecodeError a
+finalizeCountedDefinite extra ( rem, value ) =
+    if rem == 0 then
+        BD.succeed value
+
+    else
+        case extra of
+            IgnoreExtra ->
+                Inner.skipNFull rem
+                    |> BD.map (\_ -> value)
+
+            FailOnExtra ->
+                BD.fail (TooManyElements Nothing)
+
+
+finalizeCountedIndefinite : ExtraElements -> ( Int, a ) -> BD.Decoder ctx DecodeError a
+finalizeCountedIndefinite extra ( rem, value ) =
+    if rem == 0 then
+        -- Break was consumed by optionalElement
+        BD.succeed value
+
+    else
+        -- rem < 0: indefinite, need to consume remaining entries
+        case extra of
+            IgnoreExtra ->
+                Inner.skipIndefinite
+                    |> BD.map (\_ -> value)
+
+            FailOnExtra ->
+                u8
+                    |> BD.andThen Inner.expectBreak
+                    |> BD.map (\_ -> value)
 
 
 
