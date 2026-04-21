@@ -4,7 +4,7 @@ module Cbor.Decode exposing
     , succeed, fail
     , map, map2, andThen, oneOf, keep, ignore, lazy
     , int, bigInt, float, bool, null, string, bytes
-    , array, keyValue, field, foldEntries, tag
+    , array, associativeList, field, foldEntries, tag
     , RecordBuilder, record, element, optionalElement, ExtraElements(..), buildRecord
     , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
     , UnorderedRecordBuilder, unorderedRecord, onKey, buildUnorderedRecord
@@ -55,7 +55,7 @@ Run them with `decode`.
 
 ## Collections
 
-@docs array, keyValue, field, foldEntries, tag
+@docs array, associativeList, field, foldEntries, tag
 
 
 ## Record Builder (CBOR arrays → Elm values)
@@ -84,12 +84,11 @@ Run them with `decode`.
 
 -}
 
-import Bitwise
 import Bytes
 import Bytes.Decoder as BD
-import Cbor exposing (CborItem, DecodeError(..), Sign, Tag, tagToInt)
+import Cbor exposing (CborItem, DecodeError(..), Sign, Tag)
 import Dict exposing (Dict)
-import Internal.Cbor.Decode as Inner
+import Internal.Cbor.Decode as Inner exposing (u8)
 
 
 
@@ -334,25 +333,6 @@ lazy thunk =
 
 
 
--- INTERNAL HELPERS
-
-
-u8 : BD.Decoder ctx err Int
-u8 =
-    Inner.u8
-
-
-withArgument : Int -> (Int -> BD.Decoder ctx DecodeError a) -> BD.Decoder ctx DecodeError a
-withArgument =
-    Inner.withArgument
-
-
-skipEntries : Int -> BD.Decoder ctx DecodeError ()
-skipEntries =
-    Inner.skipEntries
-
-
-
 -- PRIMITIVES
 
 
@@ -441,42 +421,7 @@ array elementDecoder =
                 elementBD =
                     u8 |> BD.andThen elementBody
             in
-            Item
-                (\initialByte ->
-                    let
-                        majorType : Int
-                        majorType =
-                            Bitwise.shiftRightZfBy 5 initialByte
-                    in
-                    if majorType /= 4 then
-                        BD.fail (WrongMajorType { expected = 4, got = majorType })
-
-                    else
-                        let
-                            additionalInfo : Int
-                            additionalInfo =
-                                Bitwise.and 0x1F initialByte
-                        in
-                        if additionalInfo == 31 then
-                            BD.loop
-                                (\acc ->
-                                    u8
-                                        |> BD.andThen
-                                            (\byte ->
-                                                if byte == 0xFF then
-                                                    BD.succeed (BD.Done (List.reverse acc))
-
-                                                else
-                                                    elementBody byte
-                                                        |> BD.map (\v -> BD.Loop (v :: acc))
-                                            )
-                                )
-                                []
-
-                        else
-                            withArgument additionalInfo
-                                (\count -> BD.repeat elementBD count)
-                )
+            Item (Inner.array elementBD elementBody)
 
 
 {-| Decode a CBOR map (major type 5) as a list of key-value pairs.
@@ -484,8 +429,8 @@ array elementDecoder =
 Handles both definite and indefinite-length maps.
 
 -}
-keyValue : CborDecoder ctx k -> CborDecoder ctx v -> CborDecoder ctx (List ( k, v ))
-keyValue keyDecoder valueDecoder =
+associativeList : CborDecoder ctx k -> CborDecoder ctx v -> CborDecoder ctx (List ( k, v ))
+associativeList keyDecoder valueDecoder =
     case keyDecoder of
         Pure _ ->
             Item (\_ -> BD.fail ForbiddenPureInCollection)
@@ -500,48 +445,7 @@ keyValue keyDecoder valueDecoder =
                 keyBD =
                     u8 |> BD.andThen keyBody
             in
-            Item
-                (\initialByte ->
-                    let
-                        majorType : Int
-                        majorType =
-                            Bitwise.shiftRightZfBy 5 initialByte
-                    in
-                    if majorType /= 5 then
-                        BD.fail (WrongMajorType { expected = 5, got = majorType })
-
-                    else
-                        let
-                            additionalInfo : Int
-                            additionalInfo =
-                                Bitwise.and 0x1F initialByte
-                        in
-                        if additionalInfo == 31 then
-                            BD.loop
-                                (\acc ->
-                                    u8
-                                        |> BD.andThen
-                                            (\byte ->
-                                                if byte == 0xFF then
-                                                    BD.succeed (BD.Done (List.reverse acc))
-
-                                                else
-                                                    BD.map2
-                                                        (\k v -> BD.Loop (( k, v ) :: acc))
-                                                        (keyBody byte)
-                                                        valueBD
-                                            )
-                                )
-                                []
-
-                        else
-                            withArgument additionalInfo
-                                (\count ->
-                                    BD.repeat
-                                        (BD.map2 Tuple.pair keyBD valueBD)
-                                        count
-                                )
-                )
+            Item (Inner.associativeList keyBD keyBody valueBD)
 
 
 {-| Decode the next map entry, expecting a specific key.
@@ -598,56 +502,12 @@ foldEntries keyDecoder handler initialAcc =
                 keyBD : BD.Decoder ctx DecodeError k
                 keyBD =
                     u8 |> BD.andThen keyBody
+
+                innerHandler : k -> acc -> Inner.Decoder ctx acc
+                innerHandler k acc =
+                    unwrap (handler k acc)
             in
-            Item
-                (\initialByte ->
-                    let
-                        majorType : Int
-                        majorType =
-                            Bitwise.shiftRightZfBy 5 initialByte
-                    in
-                    if majorType /= 5 then
-                        BD.fail (WrongMajorType { expected = 5, got = majorType })
-
-                    else
-                        let
-                            additionalInfo : Int
-                            additionalInfo =
-                                Bitwise.and 0x1F initialByte
-                        in
-                        if additionalInfo == 31 then
-                            BD.loop
-                                (\acc ->
-                                    u8
-                                        |> BD.andThen
-                                            (\byte ->
-                                                if byte == 0xFF then
-                                                    BD.succeed (BD.Done acc)
-
-                                                else
-                                                    keyBody byte
-                                                        |> BD.andThen (\key -> toBD (handler key acc))
-                                                        |> BD.map BD.Loop
-                                            )
-                                )
-                                initialAcc
-
-                        else
-                            withArgument additionalInfo
-                                (\count ->
-                                    BD.loop
-                                        (\( remaining, acc ) ->
-                                            if remaining <= 0 then
-                                                BD.succeed (BD.Done acc)
-
-                                            else
-                                                keyBD
-                                                    |> BD.andThen (\key -> toBD (handler key acc))
-                                                    |> BD.map (\newAcc -> BD.Loop ( remaining - 1, newAcc ))
-                                        )
-                                        ( count, initialAcc )
-                                )
-                )
+            Item (Inner.entryLoop keyBD keyBody innerHandler initialAcc)
 
 
 {-| Decode a tagged CBOR value (major type 6).
@@ -662,26 +522,7 @@ tag expectedTag innerDecoder =
         innerBD =
             toBD innerDecoder
     in
-    Item
-        (\initialByte ->
-            let
-                majorType : Int
-                majorType =
-                    Bitwise.shiftRightZfBy 5 initialByte
-            in
-            if majorType /= 6 then
-                BD.fail (WrongMajorType { expected = 6, got = majorType })
-
-            else
-                withArgument (Bitwise.and 0x1F initialByte)
-                    (\tagNum ->
-                        if tagNum == tagToInt expectedTag then
-                            innerBD
-
-                        else
-                            BD.fail (WrongTag { expected = tagToInt expectedTag, got = tagNum })
-                    )
-        )
+    Item (Inner.tag expectedTag innerBD)
 
 
 
@@ -872,7 +713,7 @@ buildRecord extra builder =
                                     case extra of
                                         IgnoreExtra ->
                                             decoder
-                                                |> ignore (Pure (skipNFullItems (n - expectedCount)))
+                                                |> ignore (Pure (Inner.skipNFull (n - expectedCount)))
 
                                         FailOnExtra ->
                                             fail (TooManyElements (Just { expected = expectedCount, got = n }))
@@ -881,7 +722,7 @@ buildRecord extra builder =
                                 case extra of
                                     IgnoreExtra ->
                                         decoder
-                                            |> ignore (Pure skipIndefiniteElements)
+                                            |> ignore (Pure Inner.skipIndefinite)
 
                                     FailOnExtra ->
                                         decoder
@@ -903,7 +744,7 @@ buildRecord extra builder =
                                             else
                                                 case extra of
                                                     IgnoreExtra ->
-                                                        skipNFullItems rem
+                                                        Inner.skipNFull rem
                                                             |> BD.map (\_ -> value)
 
                                                     FailOnExtra ->
@@ -924,7 +765,7 @@ buildRecord extra builder =
                                                 -- rem < 0: indefinite, need to consume remaining entries
                                                 case extra of
                                                     IgnoreExtra ->
-                                                        skipIndefiniteElements
+                                                        Inner.skipIndefinite
                                                             |> BD.map (\_ -> value)
 
                                                     FailOnExtra ->
@@ -1142,7 +983,7 @@ buildKeyedRecord extra (KeyedRecordBuilder _ _ decoder) =
                                         else if state.pendingKey == Nothing then
                                             case extra of
                                                 IgnoreExtra ->
-                                                    skipEntries state.remaining
+                                                    Inner.skipEntries state.remaining
                                                         |> BD.map (\_ -> state.value)
 
                                                 FailOnExtra ->
@@ -1154,8 +995,8 @@ buildKeyedRecord extra (KeyedRecordBuilder _ _ decoder) =
                                             case extra of
                                                 IgnoreExtra ->
                                                     -- Skip the pending key's value + remaining entries
-                                                    skipFullItem
-                                                        |> BD.andThen (\() -> skipEntries (state.remaining - 1))
+                                                    Inner.skipFull
+                                                        |> BD.andThen (\() -> Inner.skipEntries (state.remaining - 1))
                                                         |> BD.map (\_ -> state.value)
 
                                                 FailOnExtra ->
@@ -1176,7 +1017,7 @@ buildKeyedRecord extra (KeyedRecordBuilder _ _ decoder) =
                                         else if state.remaining < 0 && state.pendingKey == Nothing then
                                             case extra of
                                                 IgnoreExtra ->
-                                                    skipIndefiniteElements
+                                                    Inner.skipIndefinite
                                                         |> BD.map (\_ -> state.value)
 
                                                 FailOnExtra ->
@@ -1189,8 +1030,8 @@ buildKeyedRecord extra (KeyedRecordBuilder _ _ decoder) =
                                             case extra of
                                                 IgnoreExtra ->
                                                     -- Skip pending key's value + remaining indefinite entries
-                                                    skipFullItem
-                                                        |> BD.andThen (\() -> skipIndefiniteElements)
+                                                    Inner.skipFull
+                                                        |> BD.andThen (\() -> Inner.skipIndefinite)
                                                         |> BD.map (\_ -> state.value)
 
                                                 FailOnExtra ->
@@ -1344,7 +1185,7 @@ processIndefiniteEntry config acc byte =
                         Nothing ->
                             case config.extra of
                                 IgnoreExtra ->
-                                    skipFullItem
+                                    Inner.skipFull
                                         |> BD.andThen
                                             (\() ->
                                                 u8 |> BD.andThen (processIndefiniteEntry config acc)
@@ -1375,7 +1216,7 @@ processDefiniteEntry remaining config acc =
                         Nothing ->
                             case config.extra of
                                 IgnoreExtra ->
-                                    skipFullItem
+                                    Inner.skipFull
                                         |> BD.andThen
                                             (\() ->
                                                 processDefiniteEntry (remaining - 1) config acc
@@ -1424,21 +1265,6 @@ throughout, staying entirely in the fast lane.
 itemSkip : CborDecoder ctx ()
 itemSkip =
     Item Inner.skip
-
-
-skipFullItem : BD.Decoder ctx DecodeError ()
-skipFullItem =
-    Inner.skipFull
-
-
-skipNFullItems : Int -> BD.Decoder ctx DecodeError ()
-skipNFullItems =
-    Inner.skipNFull
-
-
-skipIndefiniteElements : BD.Decoder ctx DecodeError ()
-skipIndefiniteElements =
-    Inner.skipIndefinite
 
 
 breakOrRead : CborDecoder ctx a -> Int -> BD.Decoder ctx DecodeError (Maybe a)

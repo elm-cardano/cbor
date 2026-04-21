@@ -129,7 +129,7 @@ roundTripProperties =
                         deduplicateKeys pairs
                 in
                 CE.encode (CE.map CE.Unsorted Definite (List.map (\( k, v ) -> ( CE.int k, CE.int v )) unique))
-                    |> CD.decode (CD.keyValue CD.int CD.int)
+                    |> CD.decode (CD.associativeList CD.int CD.int)
                     |> Result.map (List.sortBy Tuple.first)
                     |> Expect.equal (Ok (List.sortBy Tuple.first unique))
         , fuzz Fuzz.int "tagged int" <|
@@ -298,7 +298,7 @@ lengthEquivalenceProperties =
 
                     decoder : CD.CborDecoder ctx (List ( Int, Int ))
                     decoder =
-                        CD.keyValue CD.int CD.int
+                        CD.associativeList CD.int CD.int
 
                     sortResult : Result x (List ( Int, Int )) -> Result x (List ( Int, Int ))
                     sortResult =
@@ -344,7 +344,7 @@ sortProperties =
 
                     decoder : CD.CborDecoder ctx (List ( Int, Int ))
                     decoder =
-                        CD.keyValue CD.int CD.int
+                        CD.associativeList CD.int CD.int
 
                     sortResult : Result x (List ( Int, Int )) -> Result x (List ( Int, Int ))
                     sortResult =

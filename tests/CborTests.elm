@@ -588,24 +588,24 @@ encodeMapTests =
 
 decodeMapTests : Test
 decodeMapTests =
-    describe "Cbor.Decode.keyValue"
+    describe "Cbor.Decode.associativeList"
         [ test "empty map" <|
-            \_ -> decodeFromHex (CD.keyValue CD.int CD.int) "a0" |> Expect.equal (Ok [])
+            \_ -> decodeFromHex (CD.associativeList CD.int CD.int) "a0" |> Expect.equal (Ok [])
         , test "{1: 2, 3: 4}" <|
             \_ ->
-                decodeFromHex (CD.keyValue CD.int CD.int) "a201020304"
+                decodeFromHex (CD.associativeList CD.int CD.int) "a201020304"
                     |> Expect.equal (Ok [ ( 1, 2 ), ( 3, 4 ) ])
         , test "indefinite map" <|
             \_ ->
-                decodeFromHex (CD.keyValue CD.int CD.int) "bf01020304ff"
+                decodeFromHex (CD.associativeList CD.int CD.int) "bf01020304ff"
                     |> Expect.equal (Ok [ ( 1, 2 ), ( 3, 4 ) ])
         , test "empty indefinite map" <|
             \_ ->
-                decodeFromHex (CD.keyValue CD.int CD.int) "bfff"
+                decodeFromHex (CD.associativeList CD.int CD.int) "bfff"
                     |> Expect.equal (Ok [])
         , test "rejects array" <|
             \_ ->
-                decodeFromHex (CD.keyValue CD.int CD.int) "80"
+                decodeFromHex (CD.associativeList CD.int CD.int) "80"
                     |> Result.toMaybe
                     |> Expect.equal Nothing
         ]
@@ -721,7 +721,7 @@ roundTripTests =
                         , ( CE.int 2, CE.string "two" )
                         ]
                     )
-                    |> CD.decode (CD.keyValue CD.int CD.string)
+                    |> CD.decode (CD.associativeList CD.int CD.string)
                     |> Expect.equal (Ok [ ( 1, "one" ), ( 2, "two" ) ])
         , test "null round-trip" <|
             \_ ->
