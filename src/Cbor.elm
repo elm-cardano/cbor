@@ -1,5 +1,6 @@
 module Cbor exposing
     ( CborItem(..), IntWidth(..), FloatWidth(..), SimpleWidth(..), Length(..), Sign(..), Tag(..), tagToInt
+    , DecodeError(..)
     , diagnose
     )
 
@@ -9,6 +10,7 @@ This module defines `CborItem`, a lossless representation of any well-formed
 CBOR encoding per [RFC 8949](https://datatracker.ietf.org/doc/html/rfc8949).
 
 @docs CborItem, IntWidth, FloatWidth, SimpleWidth, Length, Sign, Tag, tagToInt
+@docs DecodeError
 @docs diagnose
 
 -}
@@ -129,6 +131,27 @@ type Tag
     | Mime
     | IsCbor
     | Unknown Int
+
+
+
+-- DECODE ERRORS
+
+
+{-| Structured error type for CBOR decoding failures.
+-}
+type DecodeError
+    = WrongMajorType { expected : Int, got : Int }
+    | WrongInitialByte { got : Int }
+    | WrongTag { expected : Int, got : Int }
+    | ReservedAdditionalInfo Int
+    | IntegerOverflow
+    | MissingKey String
+    | KeyMismatch { expected : String, got : String }
+    | TooFewElements (Maybe { expected : Int, got : Int })
+    | TooManyElements (Maybe { expected : Int, got : Int })
+    | FailedToFinalizeRecord
+    | ForbiddenPureInCollection
+    | UnknownMajorType Int
 
 
 

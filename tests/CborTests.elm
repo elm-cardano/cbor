@@ -2,7 +2,7 @@ module CborTests exposing (suite)
 
 import Bytes
 import Bytes.Decoder as BD
-import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), diagnose)
+import Cbor exposing (CborItem(..), DecodeError(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), diagnose)
 import Cbor.Decode as CD
 import Cbor.Encode as CE
 import Expect
@@ -19,14 +19,14 @@ encodeToHex encoder =
 
 {-| Helper: decode from hex using a given CborDecoder.
 -}
-decodeFromHex : CD.CborDecoder ctx a -> String -> Result (BD.Error ctx CD.DecodeError) a
+decodeFromHex : CD.CborDecoder ctx a -> String -> Result (BD.Error ctx DecodeError) a
 decodeFromHex decoder hex =
     CD.decode decoder (Hex.toBytesUnchecked hex)
 
 
 {-| Extract the DecodeError variant from a BD.Error, ignoring position info.
 -}
-extractError : Result (BD.Error ctx CD.DecodeError) a -> Maybe CD.DecodeError
+extractError : Result (BD.Error ctx DecodeError) a -> Maybe DecodeError
 extractError result =
     case result of
         Err err ->
@@ -36,7 +36,7 @@ extractError result =
             Nothing
 
 
-extractErrorHelp : BD.Error ctx CD.DecodeError -> Maybe CD.DecodeError
+extractErrorHelp : BD.Error ctx DecodeError -> Maybe DecodeError
 extractErrorHelp err =
     case err of
         BD.Custom _ e ->
@@ -857,7 +857,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooManyElements (Just { expected = 2, got = 4 })))
+                    |> Expect.equal (Just (TooManyElements (Just { expected = 2, got = 4 })))
         , test "too few elements fails" <|
             \_ ->
                 let
@@ -875,7 +875,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooFewElements (Just { expected = 2, got = 1 })))
+                    |> Expect.equal (Just (TooFewElements (Just { expected = 2, got = 1 })))
         , test "multiple optionals all absent" <|
             \_ ->
                 let
@@ -965,7 +965,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooManyElements Nothing))
+                    |> Expect.equal (Just (TooManyElements Nothing))
         , test "indefinite-length array exact match with FailOnExtra (SimpleBuilder)" <|
             \_ ->
                 let
@@ -1040,7 +1040,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.WrongInitialByte { got = 0xFF }))
+                    |> Expect.equal (Just (WrongInitialByte { got = 0xFF }))
         , test "indefinite-length array too few for required after optional (CountedBuilder)" <|
             \_ ->
                 -- Place optionalElement first so that subsequent element calls
@@ -1062,7 +1062,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooFewElements Nothing))
+                    |> Expect.equal (Just (TooFewElements Nothing))
         , test "indefinite-length array extras rejected (CountedBuilder)" <|
             \_ ->
                 let
@@ -1081,7 +1081,7 @@ recordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooManyElements Nothing))
+                    |> Expect.equal (Just (TooManyElements Nothing))
         ]
 
 
@@ -1272,7 +1272,7 @@ keyedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooManyElements Nothing))
+                    |> Expect.equal (Just (TooManyElements Nothing))
         , test "required key mismatch fails" <|
             \_ ->
                 let
@@ -1295,7 +1295,7 @@ keyedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.KeyMismatch { expected = "1", got = "5" }))
+                    |> Expect.equal (Just (KeyMismatch { expected = "1", got = "5" }))
         , test "optional as last step with unmatched key and IgnoreExtra succeeds" <|
             \_ ->
                 let
@@ -1344,7 +1344,7 @@ keyedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooManyElements Nothing))
+                    |> Expect.equal (Just (TooManyElements Nothing))
         , test "indefinite-length map all required" <|
             \_ ->
                 let
@@ -1413,7 +1413,7 @@ keyedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooManyElements Nothing))
+                    |> Expect.equal (Just (TooManyElements Nothing))
         , test "indefinite-length map optional present" <|
             \_ ->
                 let
@@ -1483,7 +1483,7 @@ keyedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.KeyMismatch { expected = "1", got = "5" }))
+                    |> Expect.equal (Just (KeyMismatch { expected = "1", got = "5" }))
         , test "indefinite-length map required field hits break" <|
             \_ ->
                 let
@@ -1505,7 +1505,7 @@ keyedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.MissingKey "1"))
+                    |> Expect.equal (Just (MissingKey "1"))
         , test "indefinite-length map optional stashes unmatched key and IgnoreExtra succeeds" <|
             \_ ->
                 let
@@ -1554,7 +1554,7 @@ keyedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooManyElements Nothing))
+                    |> Expect.equal (Just (TooManyElements Nothing))
         ]
 
 
@@ -1659,7 +1659,7 @@ unorderedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooManyElements Nothing))
+                    |> Expect.equal (Just (TooManyElements Nothing))
         , test "missing required field fails" <|
             \_ ->
                 let
@@ -1682,7 +1682,7 @@ unorderedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.FailedToFinalizeRecord)
+                    |> Expect.equal (Just FailedToFinalizeRecord)
         , test "indefinite-length map basic" <|
             \_ ->
                 let
@@ -1777,7 +1777,7 @@ unorderedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just (CD.TooManyElements Nothing))
+                    |> Expect.equal (Just (TooManyElements Nothing))
         , test "indefinite-length map missing field fails" <|
             \_ ->
                 let
@@ -1800,7 +1800,7 @@ unorderedRecordBuilderTests =
                 in
                 CD.decode decoder encoded
                     |> extractError
-                    |> Expect.equal (Just CD.FailedToFinalizeRecord)
+                    |> Expect.equal (Just FailedToFinalizeRecord)
         ]
 
 

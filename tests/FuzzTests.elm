@@ -3,7 +3,7 @@ module FuzzTests exposing (suite)
 import Bytes exposing (Bytes)
 import Bytes.Decoder as BD
 import Bytes.Encode as BE
-import Cbor exposing (CborItem(..), Length(..), Sign(..), Tag(..))
+import Cbor exposing (CborItem(..), DecodeError, Length(..), Sign(..), Tag(..))
 import Cbor.Decode as CD
 import Cbor.Encode as CE
 import Expect
@@ -350,15 +350,15 @@ sortProperties =
                     sortResult =
                         Result.map (List.sortBy Tuple.first)
 
-                    detResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
+                    detResult : Result (BD.Error ctx DecodeError) (List ( Int, Int ))
                     detResult =
                         sortResult (CD.decode decoder (CE.encode (CE.map CE.deterministicSort Definite entries)))
 
-                    canResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
+                    canResult : Result (BD.Error ctx DecodeError) (List ( Int, Int ))
                     canResult =
                         sortResult (CD.decode decoder (CE.encode (CE.map CE.canonicalSort Definite entries)))
 
-                    unsResult : Result (BD.Error ctx CD.DecodeError) (List ( Int, Int ))
+                    unsResult : Result (BD.Error ctx DecodeError) (List ( Int, Int ))
                     unsResult =
                         sortResult (CD.decode decoder (CE.encode (CE.map CE.Unsorted Definite entries)))
                 in

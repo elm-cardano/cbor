@@ -1,6 +1,6 @@
 module Cbor.Decode exposing
     ( CborDecoder, decode
-    , DecodeError(..), errorToString
+    , errorToString
     , succeed, fail
     , map, map2, andThen, oneOf, keep, ignore, lazy
     , int, bigInt, float, bool, null, string, bytes
@@ -39,7 +39,7 @@ Run them with `decode`.
 
 ## Errors
 
-@docs DecodeError, errorToString
+@docs errorToString
 
 
 ## Combinators
@@ -87,9 +87,9 @@ Run them with `decode`.
 import Bitwise
 import Bytes
 import Bytes.Decoder as BD
-import Bytes.Encode
-import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), tagToInt)
+import Cbor exposing (CborItem, DecodeError(..), Sign, Tag, tagToInt)
 import Dict exposing (Dict)
+import Internal.Cbor.Decode as Inner
 
 
 
@@ -132,23 +132,6 @@ decode decoder input =
 -- ERRORS
 
 
-{-| Structured error type for CBOR decoding failures.
--}
-type DecodeError
-    = WrongMajorType { expected : Int, got : Int }
-    | WrongInitialByte { got : Int }
-    | WrongTag { expected : Int, got : Int }
-    | ReservedAdditionalInfo Int
-    | IntegerOverflow
-    | MissingKey String
-    | KeyMismatch { expected : String, got : String }
-    | TooFewElements (Maybe { expected : Int, got : Int })
-    | TooManyElements (Maybe { expected : Int, got : Int })
-    | FailedToFinalizeRecord
-    | ForbiddenPureInCollection
-    | UnknownMajorType Int
-
-
 {-| Convert a `DecodeError` to a human-readable string.
 -}
 errorToString : DecodeError -> String
@@ -158,7 +141,7 @@ errorToString err =
             "Expected major type " ++ String.fromInt expected ++ " but got " ++ String.fromInt got
 
         WrongInitialByte { got } ->
-            "Unexpected initial byte: 0x" ++ intToHex got
+            "Unexpected initial byte: 0x" ++ Inner.intToHex got
 
         WrongTag { expected, got } ->
             "Expected tag " ++ String.fromInt expected ++ " but got " ++ String.fromInt got
@@ -356,259 +339,17 @@ lazy thunk =
 
 u8 : BD.Decoder ctx err Int
 u8 =
-    BD.unsignedInt8
+    Inner.u8
 
 
-{-| Read a big-endian unsigned 16-bit integer.
--}
-u16 : BD.Decoder ctx err Int
-u16 =
-    BD.unsignedInt16 Bytes.BE
-
-
-{-| Read a big-endian unsigned 32-bit integer.
--}
-u32 : BD.Decoder ctx err Int
-u32 =
-    BD.unsignedInt32 Bytes.BE
-
-
-{-| Maximum safe integer value for Elm (2^52).
--}
-maxSafeInt : Int
-maxSafeInt =
-    4503599627370496
-
-
-{-| Fused `decodeArgument` + overflow check.
-
-For inline values (<=23), returns `BD.succeed` directly (no overflow possible).
-For u8/u16/u32, returns the raw read decoder (no overflow possible).
-Only the 64-bit path retains the `andThen` for the overflow check.
-
--}
-safeArgument : Int -> BD.Decoder ctx DecodeError Int
-safeArgument additionalInfo =
-    if additionalInfo <= 23 then
-        BD.succeed additionalInfo
-
-    else if additionalInfo == 24 then
-        u8
-
-    else if additionalInfo == 25 then
-        u16
-
-    else if additionalInfo == 26 then
-        u32
-
-    else if additionalInfo == 27 then
-        BD.map2 (\hi lo -> hi * 0x0000000100000000 + lo) u32 u32
-            |> BD.andThen
-                (\n ->
-                    if n > maxSafeInt then
-                        BD.fail IntegerOverflow
-
-                    else
-                        BD.succeed n
-                )
-
-    else
-        BD.fail (ReservedAdditionalInfo additionalInfo)
-
-
-{-| Fused `decodeArgument` + continuation.
-
-For inline arguments (<=23), calls `f` directly — no intermediate
-`BD.succeed` + `BD.andThen`. For multi-byte arguments, composes via
-`BD.andThen` as before.
-
--}
 withArgument : Int -> (Int -> BD.Decoder ctx DecodeError a) -> BD.Decoder ctx DecodeError a
-withArgument additionalInfo f =
-    if additionalInfo <= 23 then
-        f additionalInfo
-
-    else if additionalInfo == 24 then
-        u8 |> BD.andThen f
-
-    else if additionalInfo == 25 then
-        u16 |> BD.andThen f
-
-    else if additionalInfo == 26 then
-        u32 |> BD.andThen f
-
-    else if additionalInfo == 27 then
-        BD.map2 (\hi lo -> hi * 0x0000000100000000 + lo) u32 u32
-            |> BD.andThen f
-
-    else
-        BD.fail (ReservedAdditionalInfo additionalInfo)
-
-
-{-| Decode the CBOR argument, returning the width and value.
--}
-decodeArgument64 : Int -> BD.Decoder ctx DecodeError ( IntWidth, Int )
-decodeArgument64 additionalInfo =
-    if additionalInfo <= 23 then
-        BD.succeed ( IW0, additionalInfo )
-
-    else if additionalInfo == 24 then
-        BD.map (\v -> ( IW8, v )) u8
-
-    else if additionalInfo == 25 then
-        BD.map (\v -> ( IW16, v )) u16
-
-    else if additionalInfo == 26 then
-        BD.map (\v -> ( IW32, v )) u32
-
-    else if additionalInfo == 27 then
-        BD.map2 (\hi lo -> ( IW64, hi * 0x0000000100000000 + lo )) u32 u32
-
-    else
-        BD.fail (ReservedAdditionalInfo additionalInfo)
-
-
-decodeArgumentBytes : Int -> BD.Decoder ctx DecodeError Bytes.Bytes
-decodeArgumentBytes additionalInfo =
-    if additionalInfo <= 23 then
-        BD.succeed (encodeSingleByte additionalInfo)
-
-    else if additionalInfo == 24 then
-        BD.bytes 1
-
-    else if additionalInfo == 25 then
-        BD.bytes 2
-
-    else if additionalInfo == 26 then
-        BD.bytes 4
-
-    else if additionalInfo == 27 then
-        BD.bytes 8
-
-    else
-        BD.fail (ReservedAdditionalInfo additionalInfo)
-
-
-encodeSingleByte : Int -> Bytes.Bytes
-encodeSingleByte n =
-    Bytes.Encode.encode (Bytes.Encode.unsignedInt8 n)
-
-
-intPairToBytes : Int -> Int -> Bytes.Bytes
-intPairToBytes hi lo =
-    Bytes.Encode.encode
-        (Bytes.Encode.sequence
-            [ Bytes.Encode.unsignedInt32 Bytes.BE hi
-            , Bytes.Encode.unsignedInt32 Bytes.BE lo
-            ]
-        )
-
-
-concatBytes : List Bytes.Bytes -> Bytes.Bytes
-concatBytes chunks =
-    Bytes.Encode.encode
-        (Bytes.Encode.sequence (List.map Bytes.Encode.bytes chunks))
-
-
-decodeBytesRaw : BD.Decoder ctx DecodeError Bytes.Bytes
-decodeBytesRaw =
-    u8
-        |> BD.andThen
-            (\initialByte ->
-                let
-                    majorType : Int
-                    majorType =
-                        Bitwise.shiftRightZfBy 5 initialByte
-                in
-                if majorType /= 2 then
-                    BD.fail (WrongMajorType { expected = 2, got = majorType })
-
-                else
-                    withArgument (Bitwise.and 0x1F initialByte) (\len -> BD.bytes len)
-            )
+withArgument =
+    Inner.withArgument
 
 
 skipEntries : Int -> BD.Decoder ctx DecodeError ()
-skipEntries count =
-    skipNFullItems (count * 2)
-
-
-intToHex : Int -> String
-intToHex n =
-    let
-        hi : Int
-        hi =
-            Bitwise.shiftRightZfBy 4 n
-
-        lo : Int
-        lo =
-            Bitwise.and 0x0F n
-    in
-    String.fromChar (nibbleToHexChar hi) ++ String.fromChar (nibbleToHexChar lo)
-
-
-nibbleToHexChar : Int -> Char
-nibbleToHexChar n =
-    if n < 10 then
-        Char.fromCode (n + 0x30)
-
-    else
-        Char.fromCode (n - 10 + 0x61)
-
-
-intToTag : Int -> Tag
-intToTag n =
-    case n of
-        0 ->
-            StandardDateTime
-
-        1 ->
-            EpochDateTime
-
-        2 ->
-            PositiveBigNum
-
-        3 ->
-            NegativeBigNum
-
-        4 ->
-            DecimalFraction
-
-        5 ->
-            BigFloat
-
-        21 ->
-            Base64UrlConversion
-
-        22 ->
-            Base64Conversion
-
-        23 ->
-            Base16Conversion
-
-        24 ->
-            Cbor
-
-        32 ->
-            Uri
-
-        33 ->
-            Base64Url
-
-        34 ->
-            Base64
-
-        35 ->
-            Regex
-
-        36 ->
-            Mime
-
-        55799 ->
-            IsCbor
-
-        _ ->
-            Unknown n
+skipEntries =
+    Inner.skipEntries
 
 
 
@@ -622,27 +363,7 @@ Fails if the absolute value exceeds 2^52. For larger values, use `bigInt`.
 -}
 int : CborDecoder ctx Int
 int =
-    Item
-        (\initialByte ->
-            let
-                majorType : Int
-                majorType =
-                    Bitwise.shiftRightZfBy 5 initialByte
-
-                additionalInfo : Int
-                additionalInfo =
-                    Bitwise.and 0x1F initialByte
-            in
-            if majorType == 0 then
-                safeArgument additionalInfo
-
-            else if majorType == 1 then
-                safeArgument additionalInfo
-                    |> BD.map (\n -> -1 - n)
-
-            else
-                BD.fail (WrongMajorType { expected = 0, got = majorType })
-        )
+    Item Inner.int
 
 
 {-| Decode any CBOR integer, including bignums (tags 2 and 3).
@@ -653,108 +374,28 @@ representation of the unsigned argument.
 -}
 bigInt : CborDecoder ctx ( Sign, Bytes.Bytes )
 bigInt =
-    Item
-        (\initialByte ->
-            let
-                majorType : Int
-                majorType =
-                    Bitwise.shiftRightZfBy 5 initialByte
-
-                additionalInfo : Int
-                additionalInfo =
-                    Bitwise.and 0x1F initialByte
-            in
-            if majorType == 0 then
-                decodeArgumentBytes additionalInfo
-                    |> BD.map (\bs -> ( Positive, bs ))
-
-            else if majorType == 1 then
-                decodeArgumentBytes additionalInfo
-                    |> BD.map (\bs -> ( Negative, bs ))
-
-            else if majorType == 6 then
-                withArgument additionalInfo
-                    (\tagNum ->
-                        if tagNum == 2 then
-                            decodeBytesRaw
-                                |> BD.map (\bs -> ( Positive, bs ))
-
-                        else if tagNum == 3 then
-                            decodeBytesRaw
-                                |> BD.map (\bs -> ( Negative, bs ))
-
-                        else
-                            BD.fail (WrongTag { expected = 2, got = tagNum })
-                    )
-
-            else
-                BD.fail (WrongMajorType { expected = 0, got = majorType })
-        )
+    Item Inner.bigInt
 
 
 {-| Decode a CBOR float (major type 7, additional info 25/26/27).
 -}
 float : CborDecoder ctx Float
 float =
-    Item
-        (\initialByte ->
-            let
-                majorType : Int
-                majorType =
-                    Bitwise.shiftRightZfBy 5 initialByte
-            in
-            if majorType /= 7 then
-                BD.fail (WrongMajorType { expected = 7, got = majorType })
-
-            else
-                let
-                    additionalInfo : Int
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
-                in
-                if additionalInfo == 25 then
-                    BD.float16 Bytes.BE
-
-                else if additionalInfo == 26 then
-                    BD.float32 Bytes.BE
-
-                else if additionalInfo == 27 then
-                    BD.float64 Bytes.BE
-
-                else
-                    BD.fail (WrongInitialByte { got = initialByte })
-        )
+    Item Inner.float
 
 
 {-| Decode a CBOR boolean (0xF4 for false, 0xF5 for true).
 -}
 bool : CborDecoder ctx Bool
 bool =
-    Item
-        (\initialByte ->
-            if initialByte == 0xF4 then
-                BD.succeed False
-
-            else if initialByte == 0xF5 then
-                BD.succeed True
-
-            else
-                BD.fail (WrongInitialByte { got = initialByte })
-        )
+    Item Inner.bool
 
 
 {-| Decode a CBOR null (0xF6), returning the provided default value.
 -}
 null : a -> CborDecoder ctx a
 null default =
-    Item
-        (\initialByte ->
-            if initialByte == 0xF6 then
-                BD.succeed default
-
-            else
-                BD.fail (WrongInitialByte { got = initialByte })
-        )
+    Item (Inner.null default)
 
 
 {-| Decode a CBOR text string (major type 3).
@@ -764,42 +405,7 @@ Concatenates indefinite-length chunks transparently.
 -}
 string : CborDecoder ctx String
 string =
-    Item
-        (\initialByte ->
-            let
-                majorType : Int
-                majorType =
-                    Bitwise.shiftRightZfBy 5 initialByte
-            in
-            if majorType /= 3 then
-                BD.fail (WrongMajorType { expected = 3, got = majorType })
-
-            else
-                let
-                    additionalInfo : Int
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
-                in
-                if additionalInfo == 31 then
-                    BD.loop
-                        (\chunks ->
-                            u8
-                                |> BD.andThen
-                                    (\byte ->
-                                        if byte == 0xFF then
-                                            BD.succeed (BD.Done (String.concat (List.reverse chunks)))
-
-                                        else
-                                            withArgument (Bitwise.and 0x1F byte)
-                                                (\len -> BD.string len)
-                                                |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
-                                    )
-                        )
-                        []
-
-                else
-                    withArgument additionalInfo (\len -> BD.string len)
-        )
+    Item Inner.string
 
 
 {-| Decode a CBOR byte string (major type 2).
@@ -809,42 +415,7 @@ Concatenates indefinite-length chunks transparently.
 -}
 bytes : CborDecoder ctx Bytes.Bytes
 bytes =
-    Item
-        (\initialByte ->
-            let
-                majorType : Int
-                majorType =
-                    Bitwise.shiftRightZfBy 5 initialByte
-            in
-            if majorType /= 2 then
-                BD.fail (WrongMajorType { expected = 2, got = majorType })
-
-            else
-                let
-                    additionalInfo : Int
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
-                in
-                if additionalInfo == 31 then
-                    BD.loop
-                        (\chunks ->
-                            u8
-                                |> BD.andThen
-                                    (\byte ->
-                                        if byte == 0xFF then
-                                            BD.succeed (BD.Done (concatBytes (List.reverse chunks)))
-
-                                        else
-                                            withArgument (Bitwise.and 0x1F byte)
-                                                (\len -> BD.bytes len)
-                                                |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
-                                    )
-                        )
-                        []
-
-                else
-                    withArgument additionalInfo (\len -> BD.bytes len)
-        )
+    Item Inner.bytes
 
 
 
@@ -1122,28 +693,7 @@ indefinite-length.
 -}
 arrayHeader : CborDecoder ctx (Maybe Int)
 arrayHeader =
-    Item
-        (\initialByte ->
-            let
-                majorType : Int
-                majorType =
-                    Bitwise.shiftRightZfBy 5 initialByte
-            in
-            if majorType /= 4 then
-                BD.fail (WrongMajorType { expected = 4, got = majorType })
-
-            else
-                let
-                    additionalInfo : Int
-                    additionalInfo =
-                        Bitwise.and 0x1F initialByte
-                in
-                if additionalInfo == 31 then
-                    BD.succeed Nothing
-
-                else
-                    withArgument additionalInfo (Just >> BD.succeed)
-        )
+    Item Inner.arrayHeader
 
 
 {-| Decode a CBOR map header, returning the entry count or `Nothing` for
@@ -1151,30 +701,7 @@ indefinite-length.
 -}
 mapHeader : CborDecoder ctx (Maybe Int)
 mapHeader =
-    Item mapHeaderInner
-
-
-mapHeaderInner : InnerDecoder ctx (Maybe Int)
-mapHeaderInner initialByte =
-    let
-        majorType : Int
-        majorType =
-            Bitwise.shiftRightZfBy 5 initialByte
-    in
-    if majorType /= 5 then
-        BD.fail (WrongMajorType { expected = 5, got = majorType })
-
-    else
-        let
-            additionalInfo : Int
-            additionalInfo =
-                Bitwise.and 0x1F initialByte
-        in
-        if additionalInfo == 31 then
-            BD.succeed Nothing
-
-        else
-            withArgument additionalInfo (Just >> BD.succeed)
+    Item Inner.mapHeader
 
 
 
@@ -1750,7 +1277,7 @@ Safe for typical CBOR maps (up to a few hundred entries).
 buildUnorderedRecord : ExtraElements -> (acc -> Maybe a) -> UnorderedRecordBuilder ctx comparable acc -> CborDecoder ctx a
 buildUnorderedRecord extra finalize (UnorderedRecordBuilder keyDecoder init handlers) =
     let
-        keyInner : InnerDecoder ctx comparable
+        keyInner : Inner.Decoder ctx comparable
         keyInner =
             unwrap keyDecoder
 
@@ -1765,7 +1292,7 @@ buildUnorderedRecord extra finalize (UnorderedRecordBuilder keyDecoder init hand
     in
     Item
         (\byte ->
-            mapHeaderInner byte
+            Inner.mapHeader byte
                 |> BD.andThen
                     (\maybeN ->
                         case maybeN of
@@ -1778,7 +1305,7 @@ buildUnorderedRecord extra finalize (UnorderedRecordBuilder keyDecoder init hand
         )
 
 
-unwrap : CborDecoder context value -> InnerDecoder context value
+unwrap : CborDecoder context value -> Inner.Decoder context value
 unwrap decoder =
     case decoder of
         Item inner ->
@@ -1788,20 +1315,16 @@ unwrap decoder =
             \_ -> BD.fail ForbiddenPureInCollection
 
 
-type alias InnerDecoder ctx a =
-    Int -> BD.Decoder ctx DecodeError a
-
-
 type alias MapConfig ctx comparable acc a =
     { extra : ExtraElements
     , handlers : Dict comparable (BD.Decoder ctx DecodeError (acc -> acc))
     , finalize : acc -> Maybe a
     , keyBD : BD.Decoder ctx DecodeError comparable
-    , keyInner : InnerDecoder ctx comparable
+    , keyInner : Inner.Decoder ctx comparable
     }
 
 
-processIndefiniteEntry : MapConfig ctx comparable acc a -> acc -> InnerDecoder ctx a
+processIndefiniteEntry : MapConfig ctx comparable acc a -> acc -> Inner.Decoder ctx a
 processIndefiniteEntry config acc byte =
     if byte == 0xFF then
         finalizeWith config.finalize acc
@@ -1889,212 +1412,7 @@ re-encoding with `Cbor.Encode.item` is fast enough in practice
 -}
 item : CborDecoder ctx CborItem
 item =
-    Item itemBody
-
-
-itemBD : BD.Decoder ctx DecodeError CborItem
-itemBD =
-    u8 |> BD.andThen itemBody
-
-
-itemBody : Int -> BD.Decoder ctx DecodeError CborItem
-itemBody initialByte =
-    let
-        majorType : Int
-        majorType =
-            Bitwise.shiftRightZfBy 5 initialByte
-
-        additionalInfo : Int
-        additionalInfo =
-            Bitwise.and 0x1F initialByte
-    in
-    case majorType of
-        0 ->
-            -- Unsigned integer
-            if additionalInfo == 27 then
-                BD.map2
-                    (\hi lo ->
-                        let
-                            n : Int
-                            n =
-                                hi * 0x0000000100000000 + lo
-                        in
-                        if n > maxSafeInt then
-                            CborInt64 Positive (intPairToBytes hi lo)
-
-                        else
-                            CborInt52 IW64 n
-                    )
-                    u32
-                    u32
-
-            else
-                decodeArgument64 additionalInfo
-                    |> BD.map (\( width, n ) -> CborInt52 width n)
-
-        1 ->
-            -- Negative integer
-            if additionalInfo == 27 then
-                BD.map2
-                    (\hi lo ->
-                        let
-                            n : Int
-                            n =
-                                hi * 0x0000000100000000 + lo
-                        in
-                        if n > maxSafeInt then
-                            CborInt64 Negative (intPairToBytes hi lo)
-
-                        else
-                            CborInt52 IW64 (-1 - n)
-                    )
-                    u32
-                    u32
-
-            else
-                decodeArgument64 additionalInfo
-                    |> BD.map (\( width, n ) -> CborInt52 width (-1 - n))
-
-        2 ->
-            -- Byte string
-            if additionalInfo == 31 then
-                BD.loop
-                    (\chunks ->
-                        u8
-                            |> BD.andThen
-                                (\byte ->
-                                    if byte == 0xFF then
-                                        BD.succeed (BD.Done (CborByteStringChunked (List.reverse chunks)))
-
-                                    else
-                                        withArgument (Bitwise.and 0x1F byte)
-                                            (\len -> BD.bytes len)
-                                            |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
-                                )
-                    )
-                    []
-
-            else
-                withArgument additionalInfo (\len -> BD.bytes len)
-                    |> BD.map CborByteString
-
-        3 ->
-            -- Text string
-            if additionalInfo == 31 then
-                BD.loop
-                    (\chunks ->
-                        u8
-                            |> BD.andThen
-                                (\byte ->
-                                    if byte == 0xFF then
-                                        BD.succeed (BD.Done (CborStringChunked (List.reverse chunks)))
-
-                                    else
-                                        withArgument (Bitwise.and 0x1F byte)
-                                            (\len -> BD.string len)
-                                            |> BD.map (\chunk -> BD.Loop (chunk :: chunks))
-                                )
-                    )
-                    []
-
-            else
-                withArgument additionalInfo (\len -> BD.string len)
-                    |> BD.map CborString
-
-        4 ->
-            -- Array
-            if additionalInfo == 31 then
-                BD.loop
-                    (\items ->
-                        u8
-                            |> BD.andThen
-                                (\byte ->
-                                    if byte == 0xFF then
-                                        BD.succeed (BD.Done (CborArray Indefinite (List.reverse items)))
-
-                                    else
-                                        itemBody byte
-                                            |> BD.map (\v -> BD.Loop (v :: items))
-                                )
-                    )
-                    []
-
-            else
-                withArgument additionalInfo
-                    (\count ->
-                        BD.repeat itemBD count
-                            |> BD.map (\items -> CborArray Definite items)
-                    )
-
-        5 ->
-            -- Map
-            if additionalInfo == 31 then
-                BD.loop
-                    (\entries ->
-                        u8
-                            |> BD.andThen
-                                (\byte ->
-                                    if byte == 0xFF then
-                                        BD.succeed (BD.Done (CborMap Indefinite (List.reverse entries)))
-
-                                    else
-                                        BD.map2
-                                            (\k v -> BD.Loop ({ key = k, value = v } :: entries))
-                                            (itemBody byte)
-                                            itemBD
-                                )
-                    )
-                    []
-
-            else
-                withArgument additionalInfo
-                    (\count ->
-                        BD.repeat (BD.map2 (\k v -> { key = k, value = v }) itemBD itemBD) count
-                            |> BD.map (\entries -> CborMap Definite entries)
-                    )
-
-        6 ->
-            -- Tag
-            withArgument additionalInfo
-                (\tagNum ->
-                    itemBD
-                        |> BD.map (\enclosed -> CborTag (intToTag tagNum) enclosed)
-                )
-
-        7 ->
-            -- Simple values and floats
-            if additionalInfo <= 19 then
-                BD.succeed (CborSimple SW0 additionalInfo)
-
-            else if additionalInfo == 20 then
-                BD.succeed (CborBool False)
-
-            else if additionalInfo == 21 then
-                BD.succeed (CborBool True)
-
-            else if additionalInfo == 22 then
-                BD.succeed CborNull
-
-            else if additionalInfo == 23 then
-                BD.succeed CborUndefined
-
-            else if additionalInfo == 24 then
-                u8 |> BD.map (CborSimple SW8)
-
-            else if additionalInfo == 25 then
-                BD.float16 Bytes.BE |> BD.map (CborFloat FW16)
-
-            else if additionalInfo == 26 then
-                BD.float32 Bytes.BE |> BD.map (CborFloat FW32)
-
-            else if additionalInfo == 27 then
-                BD.float64 Bytes.BE |> BD.map (CborFloat FW64)
-
-            else
-                BD.fail (ReservedAdditionalInfo additionalInfo)
-
-        _ ->
-            BD.fail (UnknownMajorType majorType)
+    Item Inner.item
 
 
 {-| Skip any well-formed CBOR data item without allocating anything.
@@ -2105,127 +1423,22 @@ throughout, staying entirely in the fast lane.
 -}
 itemSkip : CborDecoder ctx ()
 itemSkip =
-    Item skipContent
+    Item Inner.skip
 
 
-
--- FAST SKIP (no counting)
-
-
-{-| Skip the content of a CBOR item (everything after the initial byte).
-Returns () — no byte counting overhead.
--}
-skipContent : Int -> BD.Decoder ctx DecodeError ()
-skipContent initialByte =
-    let
-        majorType : Int
-        majorType =
-            Bitwise.shiftRightZfBy 5 initialByte
-
-        additionalInfo : Int
-        additionalInfo =
-            Bitwise.and 0x1F initialByte
-    in
-    case majorType of
-        0 ->
-            -- Unsigned integer: skip argument bytes
-            BD.skipBytes (argumentByteCount additionalInfo)
-
-        1 ->
-            -- Negative integer: skip argument bytes
-            BD.skipBytes (argumentByteCount additionalInfo)
-
-        2 ->
-            -- Byte string
-            if additionalInfo == 31 then
-                skipIndefiniteElements
-
-            else
-                withArgument additionalInfo
-                    (\contentLen -> BD.skipBytes contentLen)
-
-        3 ->
-            -- Text string
-            if additionalInfo == 31 then
-                skipIndefiniteElements
-
-            else
-                withArgument additionalInfo
-                    (\contentLen -> BD.skipBytes contentLen)
-
-        4 ->
-            -- Array
-            if additionalInfo == 31 then
-                skipIndefiniteElements
-
-            else
-                withArgument additionalInfo
-                    skipNFullItems
-
-        5 ->
-            -- Map
-            if additionalInfo == 31 then
-                skipIndefiniteElements
-
-            else
-                withArgument additionalInfo
-                    (\count -> skipNFullItems (count * 2))
-
-        6 ->
-            -- Tag: skip argument, then skip tagged item
-            withArgument additionalInfo
-                (\_ -> skipFullItem)
-
-        7 ->
-            -- Simple values and floats
-            if additionalInfo <= 23 then
-                BD.succeed ()
-
-            else if additionalInfo <= 27 then
-                BD.skipBytes (argumentByteCount additionalInfo)
-
-            else
-                BD.fail (ReservedAdditionalInfo additionalInfo)
-
-        _ ->
-            BD.fail (UnknownMajorType majorType)
-
-
-{-| Skip one complete CBOR item (initial byte + content).
--}
 skipFullItem : BD.Decoder ctx DecodeError ()
 skipFullItem =
-    u8 |> BD.andThen skipContent
+    Inner.skipFull
 
 
-{-| Skip n complete CBOR items.
-Uses BD.repeat for its optimized fast path (avoids per-iteration decoder construction).
--}
 skipNFullItems : Int -> BD.Decoder ctx DecodeError ()
-skipNFullItems count =
-    BD.repeat skipFullItem count
-        |> BD.map (\_ -> ())
+skipNFullItems =
+    Inner.skipNFull
 
 
-{-| Skip indefinite-length elements (array/map items or byte/text chunks)
-until break byte (0xFF).
--}
 skipIndefiniteElements : BD.Decoder ctx DecodeError ()
 skipIndefiniteElements =
-    BD.loop
-        (\() ->
-            u8
-                |> BD.andThen
-                    (\byte ->
-                        if byte == 0xFF then
-                            BD.succeed (BD.Done ())
-
-                        else
-                            skipContent byte
-                                |> BD.map (\() -> BD.Loop ())
-                    )
-        )
-        ()
+    Inner.skipIndefinite
 
 
 breakOrRead : CborDecoder ctx a -> Int -> BD.Decoder ctx DecodeError (Maybe a)
@@ -2248,9 +1461,6 @@ forceRead decoder byte =
             BD.fail ForbiddenPureInCollection
 
 
-{-| Expect the break byte (0xFF) next in the stream.
-Fails with TooManyElements if the next byte is not break.
--}
 expectBreak : Int -> BD.Decoder ctx DecodeError ()
 expectBreak byte =
     if byte == 0xFF then
@@ -2258,26 +1468,3 @@ expectBreak byte =
 
     else
         BD.fail (TooManyElements Nothing)
-
-
-{-| How many extra bytes the CBOR argument takes beyond the initial byte.
--}
-argumentByteCount : Int -> Int
-argumentByteCount additionalInfo =
-    if additionalInfo <= 23 then
-        0
-
-    else if additionalInfo == 24 then
-        1
-
-    else if additionalInfo == 25 then
-        2
-
-    else if additionalInfo == 26 then
-        4
-
-    else if additionalInfo == 27 then
-        8
-
-    else
-        0
