@@ -612,7 +612,7 @@ dec_tl_array100 () =
 
 dec_ec_map100 : () -> Maybe (List ( Int, Int ))
 dec_ec_map100 () =
-    CD.decode (CD.keyValue CD.int CD.int) map100Data |> Result.toMaybe
+    CD.decode (CD.associativeList CD.int CD.int) map100Data |> Result.toMaybe
 
 
 dec_tl_map100 : () -> Maybe (List ( Int, Int ))
