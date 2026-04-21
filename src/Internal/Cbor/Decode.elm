@@ -227,22 +227,22 @@ withArgument additionalInfo f =
 Used by the `item` decoder to preserve encoding details in `CborInt52`.
 
 -}
-decodeArgument64 : Int -> BD.Decoder ctx DecodeError ( IntWidth, Int )
+decodeArgument64 : Int -> BD.Decoder ctx DecodeError { width : IntWidth, value : Int }
 decodeArgument64 additionalInfo =
     if additionalInfo <= 23 then
-        BD.succeed ( IW0, additionalInfo )
+        BD.succeed { width = IW0, value = additionalInfo }
 
     else if additionalInfo == 24 then
-        BD.map (\v -> ( IW8, v )) u8
+        BD.map (\v -> { width = IW8, value = v }) u8
 
     else if additionalInfo == 25 then
-        BD.map (\v -> ( IW16, v )) u16
+        BD.map (\v -> { width = IW16, value = v }) u16
 
     else if additionalInfo == 26 then
-        BD.map (\v -> ( IW32, v )) u32
+        BD.map (\v -> { width = IW32, value = v }) u32
 
     else if additionalInfo == 27 then
-        BD.map2 (\hi lo -> ( IW64, hi * 0x0000000100000000 + lo )) u32 u32
+        BD.map2 (\hi lo -> { width = IW64, value = hi * 0x0000000100000000 + lo }) u32 u32
 
     else
         BD.fail (ReservedAdditionalInfo additionalInfo)
@@ -542,25 +542,27 @@ float initialByte =
 -}
 bool : Decoder ctx Bool
 bool initialByte =
-    if initialByte == 0xF4 then
-        BD.succeed False
+    case initialByte of
+        0xF4 ->
+            BD.succeed False
 
-    else if initialByte == 0xF5 then
-        BD.succeed True
+        0xF5 ->
+            BD.succeed True
 
-    else
-        BD.fail (WrongInitialByte { got = initialByte })
+        _ ->
+            BD.fail (WrongInitialByte { got = initialByte })
 
 
 {-| Decode a CBOR null (initial byte 0xF6), returning the given default.
 -}
 null : a -> Decoder ctx a
 null default initialByte =
-    if initialByte == 0xF6 then
-        BD.succeed default
+    case initialByte of
+        0xF6 ->
+            BD.succeed default
 
-    else
-        BD.fail (WrongInitialByte { got = initialByte })
+        _ ->
+            BD.fail (WrongInitialByte { got = initialByte })
 
 
 {-| Decode a CBOR text string (major type 3).
@@ -873,16 +875,16 @@ entryLoop keyBD keyBody handler initialAcc initialByte =
             withArgument additionalInfo
                 (\count ->
                     BD.loop
-                        (\( remaining, acc ) ->
+                        (\{ remaining, acc } ->
                             if remaining <= 0 then
                                 BD.succeed (BD.Done acc)
 
                             else
                                 keyBD
                                     |> BD.andThen (\key -> u8 |> BD.andThen (handler key acc))
-                                    |> BD.map (\newAcc -> BD.Loop ( remaining - 1, newAcc ))
+                                    |> BD.map (\newAcc -> BD.Loop { remaining = remaining - 1, acc = newAcc })
                         )
-                        ( count, initialAcc )
+                        { remaining = count, acc = initialAcc }
                 )
 
 
@@ -959,7 +961,7 @@ item initialByte =
 
             else
                 decodeArgument64 additionalInfo
-                    |> BD.map (\( width, n ) -> CborInt52 width n)
+                    |> BD.map (\{ width, value } -> CborInt52 width value)
 
         1 ->
             -- Negative integer (major type 1): value = -1 - argument
@@ -982,7 +984,7 @@ item initialByte =
 
             else
                 decodeArgument64 additionalInfo
-                    |> BD.map (\( width, n ) -> CborInt52 width (-1 - n))
+                    |> BD.map (\{ width, value } -> CborInt52 width (-1 - value))
 
         2 ->
             -- Byte string (major type 2)
@@ -1292,11 +1294,12 @@ type alias KeyedState k a =
 -}
 expectBreak : Decoder ctx ()
 expectBreak byte =
-    if byte == 0xFF then
-        BD.succeed ()
+    case byte of
+        0xFF ->
+            BD.succeed ()
 
-    else
-        BD.fail (TooManyElements Nothing)
+        _ ->
+            BD.fail (TooManyElements Nothing)
 
 
 {-| Read the next key from a keyed record state (CPS).

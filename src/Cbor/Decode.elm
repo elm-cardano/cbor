@@ -557,7 +557,7 @@ or `CountedBuilder` when `optionalElement` is used (counts remaining items).
 -}
 type RecordBuilder ctx a
     = SimpleBuilder Int (CborDecoder ctx a)
-    | CountedBuilder (Int -> BD.Decoder ctx DecodeError ( Int, a ))
+    | CountedBuilder (Int -> BD.Decoder ctx DecodeError { remaining : Int, value : a })
 
 
 {-| Start building a record decoder with the constructor function.
@@ -595,12 +595,12 @@ element valueDecoder builder =
                 (\remaining ->
                     innerDecoder remaining
                         |> BD.andThen
-                            (\( rem, f ) ->
+                            (\state ->
                                 Inner.readCountedElement valueBD
                                     valueInner
-                                    rem
+                                    state.remaining
                                     (BD.fail (TooFewElements Nothing))
-                                    (\v -> ( rem - 1, f v ))
+                                    (\v -> { remaining = state.remaining - 1, value = state.value v })
                             )
                 )
 
@@ -621,7 +621,7 @@ optionalElement valueDecoder default builder =
         valueInner =
             unwrap valueDecoder
 
-        counted : Int -> BD.Decoder ctx DecodeError ( Int, v -> a )
+        counted : Int -> BD.Decoder ctx DecodeError { remaining : Int, value : v -> a }
         counted =
             toCountedInner builder
     in
@@ -629,17 +629,17 @@ optionalElement valueDecoder default builder =
         (\remaining ->
             counted remaining
                 |> BD.andThen
-                    (\( rem, f ) ->
+                    (\state ->
                         Inner.readCountedElement valueBD
                             valueInner
-                            rem
-                            (BD.succeed ( 0, f default ))
-                            (\v -> ( rem - 1, f v ))
+                            state.remaining
+                            (BD.succeed { remaining = 0, value = state.value default })
+                            (\v -> { remaining = state.remaining - 1, value = state.value v })
                     )
         )
 
 
-toCountedInner : RecordBuilder ctx a -> (Int -> BD.Decoder ctx DecodeError ( Int, a ))
+toCountedInner : RecordBuilder ctx a -> (Int -> BD.Decoder ctx DecodeError { remaining : Int, value : a })
 toCountedInner builder =
     case builder of
         SimpleBuilder count decoder ->
@@ -649,7 +649,7 @@ toCountedInner builder =
                     toBD decoder
             in
             \remaining ->
-                decoderBD |> BD.map (\value -> ( remaining - count, value ))
+                decoderBD |> BD.map (\v -> { remaining = remaining - count, value = v })
 
         CountedBuilder inner ->
             inner
@@ -720,38 +720,40 @@ buildRecord extra builder =
                 arrayHeader
 
 
-finalizeCountedDefinite : ExtraElements -> ( Int, a ) -> BD.Decoder ctx DecodeError a
-finalizeCountedDefinite extra ( rem, value ) =
-    if rem == 0 then
-        BD.succeed value
+finalizeCountedDefinite : ExtraElements -> { remaining : Int, value : a } -> BD.Decoder ctx DecodeError a
+finalizeCountedDefinite extra state =
+    case state.remaining of
+        0 ->
+            BD.succeed state.value
 
-    else
-        case extra of
-            IgnoreExtra ->
-                Inner.skipNFull rem
-                    |> BD.map (\_ -> value)
+        _ ->
+            case extra of
+                IgnoreExtra ->
+                    Inner.skipNFull state.remaining
+                        |> BD.map (\_ -> state.value)
 
-            FailOnExtra ->
-                BD.fail (TooManyElements Nothing)
+                FailOnExtra ->
+                    BD.fail (TooManyElements Nothing)
 
 
-finalizeCountedIndefinite : ExtraElements -> ( Int, a ) -> BD.Decoder ctx DecodeError a
-finalizeCountedIndefinite extra ( rem, value ) =
-    if rem == 0 then
-        -- Break was consumed by optionalElement
-        BD.succeed value
+finalizeCountedIndefinite : ExtraElements -> { remaining : Int, value : a } -> BD.Decoder ctx DecodeError a
+finalizeCountedIndefinite extra state =
+    case state.remaining of
+        0 ->
+            -- Break was consumed by optionalElement
+            BD.succeed state.value
 
-    else
-        -- rem < 0: indefinite, need to consume remaining entries
-        case extra of
-            IgnoreExtra ->
-                Inner.skipIndefinite
-                    |> BD.map (\_ -> value)
+        _ ->
+            -- remaining < 0: indefinite, need to consume remaining entries
+            case extra of
+                IgnoreExtra ->
+                    Inner.skipIndefinite
+                        |> BD.map (\_ -> state.value)
 
-            FailOnExtra ->
-                u8
-                    |> BD.andThen Inner.expectBreak
-                    |> BD.map (\_ -> value)
+                FailOnExtra ->
+                    u8
+                        |> BD.andThen Inner.expectBreak
+                        |> BD.map (\_ -> state.value)
 
 
 
@@ -919,61 +921,65 @@ buildKeyedRecord extra (KeyedRecordBuilder _ _ decoder) =
 
 finalizeKeyedDefinite : ExtraElements -> Inner.KeyedState k a -> BD.Decoder ctx DecodeError a
 finalizeKeyedDefinite extra state =
-    if state.remaining == 0 && state.pendingKey == Nothing then
-        BD.succeed state.value
+    case state.pendingKey of
+        Nothing ->
+            case state.remaining of
+                0 ->
+                    BD.succeed state.value
 
-    else if state.pendingKey == Nothing then
-        case extra of
-            IgnoreExtra ->
-                Inner.skipEntries state.remaining
-                    |> BD.map (\_ -> state.value)
+                _ ->
+                    case extra of
+                        IgnoreExtra ->
+                            Inner.skipEntries state.remaining
+                                |> BD.map (\_ -> state.value)
 
-            FailOnExtra ->
-                BD.fail (TooManyElements Nothing)
+                        FailOnExtra ->
+                            BD.fail (TooManyElements Nothing)
 
-    else
-        -- A pending key exists: an optional read a key that didn't match.
-        -- The value for that key is still in the stream.
-        case extra of
-            IgnoreExtra ->
-                Inner.skipFull
-                    |> BD.andThen (\() -> Inner.skipEntries (state.remaining - 1))
-                    |> BD.map (\_ -> state.value)
+        Just _ ->
+            -- A pending key exists: an optional read a key that didn't match.
+            -- The value for that key is still in the stream.
+            case extra of
+                IgnoreExtra ->
+                    Inner.skipFull
+                        |> BD.andThen (\() -> Inner.skipEntries (state.remaining - 1))
+                        |> BD.map (\_ -> state.value)
 
-            FailOnExtra ->
-                BD.fail (TooManyElements Nothing)
+                FailOnExtra ->
+                    BD.fail (TooManyElements Nothing)
 
 
 finalizeKeyedIndefinite : ExtraElements -> Inner.KeyedState k a -> BD.Decoder ctx DecodeError a
 finalizeKeyedIndefinite extra state =
-    if state.remaining == 0 && state.pendingKey == Nothing then
-        -- Break was consumed by optional
-        BD.succeed state.value
+    case state.pendingKey of
+        Nothing ->
+            case state.remaining of
+                0 ->
+                    -- Break was consumed by optional
+                    BD.succeed state.value
 
-    else if state.remaining < 0 && state.pendingKey == Nothing then
-        case extra of
-            IgnoreExtra ->
-                Inner.skipIndefinite
-                    |> BD.map (\_ -> state.value)
+                _ ->
+                    -- remaining < 0: indefinite, need to consume remaining entries
+                    case extra of
+                        IgnoreExtra ->
+                            Inner.skipIndefinite
+                                |> BD.map (\_ -> state.value)
 
-            FailOnExtra ->
-                u8
-                    |> BD.andThen Inner.expectBreak
-                    |> BD.map (\_ -> state.value)
+                        FailOnExtra ->
+                            u8
+                                |> BD.andThen Inner.expectBreak
+                                |> BD.map (\_ -> state.value)
 
-    else if state.pendingKey /= Nothing then
-        -- A pending key exists: handle like extra elements
-        case extra of
-            IgnoreExtra ->
-                Inner.skipFull
-                    |> BD.andThen (\() -> Inner.skipIndefinite)
-                    |> BD.map (\_ -> state.value)
+        Just _ ->
+            -- A pending key exists: handle like extra elements
+            case extra of
+                IgnoreExtra ->
+                    Inner.skipFull
+                        |> BD.andThen (\() -> Inner.skipIndefinite)
+                        |> BD.map (\_ -> state.value)
 
-            FailOnExtra ->
-                BD.fail (TooManyElements Nothing)
-
-    else
-        BD.fail (TooManyElements Nothing)
+                FailOnExtra ->
+                    BD.fail (TooManyElements Nothing)
 
 
 
