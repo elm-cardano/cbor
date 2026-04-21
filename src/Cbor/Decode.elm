@@ -106,7 +106,7 @@ the fast path without `BD.oneOf`.
 
 -}
 type CborDecoder ctx a
-    = Item (Int -> BD.Decoder ctx DecodeError a)
+    = Item (Inner.Decoder ctx a)
     | Pure (BD.Decoder ctx DecodeError a)
 
 
@@ -557,7 +557,7 @@ or `CountedBuilder` when `optionalElement` is used (counts remaining items).
 -}
 type RecordBuilder ctx a
     = SimpleBuilder Int (CborDecoder ctx a)
-    | CountedBuilder (Int -> BD.Decoder ctx DecodeError { remaining : Int, value : a })
+    | CountedBuilder (Inner.Decoder ctx { remaining : Int, value : a })
 
 
 {-| Start building a record decoder with the constructor function.
@@ -621,7 +621,7 @@ optionalElement valueDecoder default builder =
         valueInner =
             unwrap valueDecoder
 
-        counted : Int -> BD.Decoder ctx DecodeError { remaining : Int, value : v -> a }
+        counted : Inner.Decoder ctx { remaining : Int, value : v -> a }
         counted =
             toCountedInner builder
     in
@@ -639,7 +639,7 @@ optionalElement valueDecoder default builder =
         )
 
 
-toCountedInner : RecordBuilder ctx a -> (Int -> BD.Decoder ctx DecodeError { remaining : Int, value : a })
+toCountedInner : RecordBuilder ctx a -> Inner.Decoder ctx { remaining : Int, value : a }
 toCountedInner builder =
     case builder of
         SimpleBuilder count decoder ->
@@ -1104,11 +1104,12 @@ type alias MapConfig ctx comparable acc a =
 
 processIndefiniteEntry : MapConfig ctx comparable acc a -> acc -> Inner.Decoder ctx a
 processIndefiniteEntry config acc byte =
-    if byte == 0xFF then
-        finalizeWith config.finalize acc
+    case byte of
+        0xFF ->
+            finalizeWith config.finalize acc
 
-    else
-        config.keyInner byte
+        _ ->
+            config.keyInner byte
             |> BD.andThen
                 (\key ->
                     case Dict.get key config.handlers of
