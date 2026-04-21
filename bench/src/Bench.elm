@@ -13,7 +13,7 @@ module Bench exposing
     , dec_record_30_array
     , dec_keyed_3_builder, dec_keyed_3_fold
     , dec_keyed_10_builder, dec_keyed_10_fold
-    , dec_keyed_30_keyValue, dec_keyed_30_fold
+    , dec_keyed_30_associativeList, dec_keyed_30_fold
     , dec_keyed_3_unordered, dec_keyed_10_unordered
     , dec_item_array100int, dec_item_array100str
     , dec_item_nested10, dec_item_map50str
@@ -127,17 +127,17 @@ elm-bench -f Bench.dec_record_30_array "()"
 
 `builder` = `CD.keyedRecord` + `CD.required` pipeline (pendingKey state).
 `fold` = `CD.foldEntries` (simple accumulator loop).
-`keyValue` = `CD.keyValue` (pair decoder loop).
+`associativeList` = `CD.associativeList` (pair decoder loop).
 
 ```sh
 elm-bench -f Bench.dec_keyed_3_builder -f Bench.dec_keyed_3_fold -f Bench.dec_keyed_3_unordered "()"
 elm-bench -f Bench.dec_keyed_10_builder -f Bench.dec_keyed_10_fold -f Bench.dec_keyed_10_unordered "()"
-elm-bench -f Bench.dec_keyed_30_keyValue -f Bench.dec_keyed_30_fold "()"
+elm-bench -f Bench.dec_keyed_30_associativeList -f Bench.dec_keyed_30_fold "()"
 ```
 
 @docs dec_keyed_3_builder, dec_keyed_3_fold
 @docs dec_keyed_10_builder, dec_keyed_10_fold
-@docs dec_keyed_30_keyValue, dec_keyed_30_fold
+@docs dec_keyed_30_associativeList, dec_keyed_30_fold
 @docs dec_keyed_3_unordered, dec_keyed_10_unordered
 
 
@@ -410,7 +410,7 @@ decodePlutusFlat : CD.CborDecoder ctx PlutusFlat
 decodePlutusFlat =
     CD.oneOf
         [ CD.tag (Unknown 121) (CD.array CD.int) |> CD.map PFConstr
-        , CD.keyValue CD.int CD.int |> CD.map (\_ -> PFMap)
+        , CD.associativeList CD.int CD.int |> CD.map (\_ -> PFMap)
         , CD.array CD.int |> CD.map (\_ -> PFArray)
         , CD.int |> CD.map PFInt
         , CD.bytes |> CD.map PFBytes
@@ -429,7 +429,7 @@ decodePlutusNested =
     in
     CD.oneOf
         [ CD.tag (Unknown 121) (CD.array self) |> CD.map PNConstr
-        , CD.keyValue self self |> CD.map PNMap
+        , CD.associativeList self self |> CD.map PNMap
         , CD.array self |> CD.map PNArray
         , CD.int |> CD.map PNInt
         , CD.bytes |> CD.map PNBytes
@@ -820,7 +820,7 @@ dec_oneOf_nested_10 () =
 -- Keyed record builder (CBOR maps -> Elm records):
 --   builder = CD.keyedRecord + CD.required pipeline (pendingKey state)
 --   fold    = CD.foldEntries (simple accumulator loop)
---   keyValue = CD.keyValue (pair decoder loop, baseline for 30 entries)
+--   associativeList = CD.associativeList (pair decoder loop, baseline for 30 entries)
 
 
 dec_record_3_builder : () -> Maybe R3
@@ -872,9 +872,9 @@ dec_keyed_10_fold () =
     CD.decode decFold keyedRecord10Data |> Result.toMaybe
 
 
-dec_keyed_30_keyValue : () -> Maybe (List ( Int, Int ))
-dec_keyed_30_keyValue () =
-    CD.decode (CD.keyValue CD.int CD.int) keyedRecord30Data |> Result.toMaybe
+dec_keyed_30_associativeList : () -> Maybe (List ( Int, Int ))
+dec_keyed_30_associativeList () =
+    CD.decode (CD.associativeList CD.int CD.int) keyedRecord30Data |> Result.toMaybe
 
 
 dec_keyed_30_fold : () -> Maybe (List ( Int, Int ))
@@ -977,4 +977,4 @@ dec_itemSkip_nested10 () =
 
 dec_itemSkip_map50str : () -> Maybe ()
 dec_itemSkip_map50str () =
-    CD.decode (CD.keyValue CD.itemSkip CD.itemSkip) map50strData |> Result.toMaybe |> Maybe.map (\_ -> ())
+    CD.decode (CD.associativeList CD.itemSkip CD.itemSkip) map50strData |> Result.toMaybe |> Maybe.map (\_ -> ())

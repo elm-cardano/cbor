@@ -4,6 +4,8 @@ module Internal.Cbor.Decode exposing
     , item, skip, skipFull, skipNFull, skipIndefinite, skipEntries
     , mapHeader, arrayHeader
     , array, associativeList, entryLoop, tag
+    , KeyedState, expectBreak, readKeyFrom
+    , readCountedElement
     , u8
     , intToHex
     )
@@ -66,6 +68,16 @@ to produce the opaque `CborDecoder` type exposed to package users.
 ## Collections
 
 @docs array, associativeList, entryLoop, tag
+
+
+## Keyed Record Helpers
+
+@docs KeyedState, expectBreak, readKeyFrom
+
+
+## Counted Element Helper
+
+@docs readCountedElement
 
 
 ## Argument Decoders
@@ -1255,3 +1267,105 @@ skipIndefinite =
 skipEntries : Int -> BD.Decoder ctx DecodeError ()
 skipEntries count =
     skipNFull (count * 2)
+
+
+
+-- KEYED RECORD HELPERS
+
+
+{-| State threaded through the keyed record builder pipeline.
+
+  - `remaining` — entries left to read (negative for indefinite-length maps)
+  - `pendingKey` — key stashed by a previous `optional` that didn't match
+  - `value` — the partially-constructed record value
+
+-}
+type alias KeyedState k a =
+    { remaining : Int
+    , pendingKey : Maybe k
+    , value : a
+    }
+
+
+
+{-| Expect a break byte (0xFF) or fail with `TooManyElements`.
+-}
+expectBreak : Decoder ctx ()
+expectBreak byte =
+    if byte == 0xFF then
+        BD.succeed ()
+
+    else
+        BD.fail (TooManyElements Nothing)
+
+
+{-| Read the next key from a keyed record state (CPS).
+
+Takes two continuations instead of returning `Maybe k`, avoiding the
+allocation and extra `BD.andThen` in the hot path.
+
+Handles the cases that arise during ordered key decoding:
+
+1.  A pending key exists (stashed by a previous `optional`) → `onKey`
+2.  No more entries (`remaining == 0`) → `onNone`
+3.  Definite-length (`remaining > 0`) → read key via pre-applied decoder → `onKey`
+4.  Indefinite-length (`remaining < 0`) → read byte, break → `onNone`, key → `onKey`
+
+-}
+readKeyFrom : BD.Decoder ctx DecodeError k -> Decoder ctx k -> KeyedState k a -> BD.Decoder ctx DecodeError b -> (k -> BD.Decoder ctx DecodeError b) -> BD.Decoder ctx DecodeError b
+readKeyFrom keyBD keyInner state onNone onKey =
+    case state.pendingKey of
+        Just k ->
+            onKey k
+
+        Nothing ->
+            if state.remaining == 0 then
+                onNone
+
+            else if state.remaining < 0 then
+                u8
+                    |> BD.andThen
+                        (\byte ->
+                            if byte == 0xFF then
+                                onNone
+
+                            else
+                                keyInner byte |> BD.andThen onKey
+                        )
+
+            else
+                keyBD |> BD.andThen onKey
+
+
+
+-- COUNTED ELEMENT HELPER
+
+
+{-| Read the next element from a counted array context (CPS).
+
+Used by both `element` and `optionalElement` in their `CountedBuilder` paths.
+Uses `BD.map` (not `BD.andThen`) in the definite hot path, so no overhead.
+
+  - `rem > 0` (definite, elements remain) → read via pre-applied `valueBD`, apply `onValue`
+  - `rem < 0` (indefinite) → read byte; break → `onNone`; otherwise decode and apply `onValue`
+  - `rem == 0` (definite, exhausted) → `onNone`
+
+-}
+readCountedElement : BD.Decoder ctx DecodeError v -> Decoder ctx v -> Int -> BD.Decoder ctx DecodeError b -> (v -> b) -> BD.Decoder ctx DecodeError b
+readCountedElement valueBD valueInner rem onNone onValue =
+    if rem > 0 then
+        valueBD |> BD.map onValue
+
+    else if rem < 0 then
+        u8
+            |> BD.andThen
+                (\byte ->
+                    if byte == 0xFF then
+                        onNone
+
+                    else
+                        valueInner byte |> BD.map onValue
+                )
+
+    else
+        onNone
