@@ -145,11 +145,14 @@ int n =
     Encoder (encodeInt n)
 
 
-{-| Encode an arbitrarily large integer from its `Sign` and big-endian
-unsigned magnitude bytes.
+{-| Encode an integer that does not fit in a 32-bit CBOR argument.
 
-  - If the magnitude fits in 8 bytes, encodes as a standard CBOR integer
-    (major type 0 or 1) using the shortest form.
+For values that fit in `Encode.int`, prefer `int` instead. This function
+is for magnitudes that exceed 32 bits.
+You should even prefer `Encode.int` on numbers up to 2^53-1.
+
+  - If the magnitude fits in 8 bytes, encodes as a 64-bit CBOR integer
+    (major type 0 or 1, additional info 27).
   - If the magnitude exceeds 8 bytes, encodes as a bignum
     (tag 2 for `Positive`, tag 3 for `Negative`) wrapping the byte string.
 
@@ -158,8 +161,6 @@ For `Negative`, the actual mathematical value is `−1 − magnitude`,
 matching the CBOR spec for both major type 1 and tag 3.
 
 Leading zero bytes are stripped before encoding.
-
-TODO: try to optimize because hot in elm-cardano
 
 -}
 bigInt : Sign -> Bytes -> Encoder
@@ -172,43 +173,34 @@ bigInt sign magnitude =
         width : Int
         width =
             Bytes.width stripped
-
-        majorType : Int
-        majorType =
-            case sign of
-                Positive ->
-                    0
-
-                Negative ->
-                    1
     in
-    if width <= 4 then
-        -- Fits in 32 bits — safe to convert to Elm Int and use encodeHeader.
-        -- Remark: A bit of time wasted for sizes 2, 4, because in theory no need to decode/reencode.
-        -- Needed for 1 (in case fit in header) and 3 to adjust to 4.
+    if width <= 8 then
+        -- Decode as two U32 halves and emit as 64-bit CBOR integer.
         let
-            arg : Int
-            arg =
-                Bytes.Decode.decode (unsignedDecoder width) stripped
-                    |> Maybe.withDefault 0
-        in
-        Encoder (encodeHeader majorType arg)
+            majorType : Int
+            majorType =
+                case sign of
+                    Positive ->
+                        0
 
-    else if width <= 8 then
-        -- Fits in 64-bit CBOR integer but may exceed Elm's safe Int range.
-        -- Decode as two U32 halves and emit directly.
-        let
-            -- Remark: we probably don’t need the tuple allocation here and could
-            -- do the encoding directly by mapping the encoders.
-            -- Optimization to check later.
+                    Negative ->
+                        1
+
             ( hi, lo ) =
-                Bytes.Decode.decode
-                    (Bytes.Decode.map2 Tuple.pair
-                        (unsignedDecoder (width - 4))
-                        (Bytes.Decode.unsignedInt32 Bytes.BE)
+                if width <= 4 then
+                    ( 0
+                    , Bytes.Decode.decode (unsignedDecoder width) stripped
+                        |> Maybe.withDefault 0
                     )
-                    stripped
-                    |> Maybe.withDefault ( 0, 0 )
+
+                else
+                    Bytes.Decode.decode
+                        (Bytes.Decode.map2 Tuple.pair
+                            (unsignedDecoder (width - 4))
+                            (Bytes.Decode.unsignedInt32 Bytes.BE)
+                        )
+                        stripped
+                        |> Maybe.withDefault ( 0, 0 )
         in
         Encoder
             (BE.sequence

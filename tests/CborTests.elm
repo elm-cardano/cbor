@@ -1,6 +1,6 @@
 module CborTests exposing (suite)
 
-import Bytes exposing (Bytes)
+import Bytes
 import Bytes.Decoder as BD
 import Cbor exposing (CborItem(..), DecodeError(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), diagnose)
 import Cbor.Decode as CD
@@ -2306,53 +2306,29 @@ diagnosticTests =
 encodeBigIntTests : Test
 encodeBigIntTests =
     describe "Cbor.Encode.bigInt"
-        [ -- Width 0 after stripping: value 0
-          test "positive zero (empty bytes)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "")) |> Expect.equal "00"
-        , test "negative zero (empty bytes) encodes as -1" <|
-            \_ -> encodeToHex (CE.bigInt Negative (Hex.toBytesUnchecked "")) |> Expect.equal "20"
+        [ -- All ≤8-byte magnitudes produce 64-bit encoding (mt|27 + 8 bytes)
+          test "positive zero (empty bytes) → 64-bit" <|
+            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "")) |> Expect.equal "1b0000000000000000"
+        , test "negative zero (empty bytes) → 64-bit -1" <|
+            \_ -> encodeToHex (CE.bigInt Negative (Hex.toBytesUnchecked "")) |> Expect.equal "3b0000000000000000"
+        , test "positive 1-byte magnitude → 64-bit" <|
+            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "ff")) |> Expect.equal "1b00000000000000ff"
+        , test "positive 2-byte magnitude → 64-bit" <|
+            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "0100")) |> Expect.equal "1b0000000000000100"
+        , test "positive 3-byte magnitude → 64-bit" <|
+            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "010000")) |> Expect.equal "1b0000000000010000"
+        , test "positive 4-byte magnitude → 64-bit" <|
+            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "ffffffff")) |> Expect.equal "1b00000000ffffffff"
+        , test "negative 4-byte magnitude → 64-bit" <|
+            \_ -> encodeToHex (CE.bigInt Negative (Hex.toBytesUnchecked "ffffffff")) |> Expect.equal "3b00000000ffffffff"
 
-        -- Width 1: inline (0–23) and 1-byte argument (24–255)
-        , test "positive 5 (inline)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "05")) |> Expect.equal "05"
-        , test "positive 23 (last inline)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "17")) |> Expect.equal "17"
-        , test "positive 24 (first 1-byte arg)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "18")) |> Expect.equal "1818"
-        , test "positive 255 (max 1-byte arg)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "ff")) |> Expect.equal "18ff"
-        , test "negative 5 (inline, meaning -6)" <|
-            \_ -> encodeToHex (CE.bigInt Negative (Hex.toBytesUnchecked "05")) |> Expect.equal "25"
-
-        -- Width 2: 2-byte argument
-        , test "positive 256 (2-byte arg)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "0100")) |> Expect.equal "190100"
-        , test "positive 65535 (max 2-byte arg)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "ffff")) |> Expect.equal "19ffff"
-
-        -- Width 3: promoted to 4-byte argument
-        , test "positive 65536 (3-byte → 4-byte arg)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "010000")) |> Expect.equal "1a00010000"
-        , test "positive 16777215 (max 3-byte)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "ffffff")) |> Expect.equal "1a00ffffff"
-
-        -- Width 4: 4-byte argument
-        , test "positive 4294967295 (max 4-byte arg)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "ffffffff")) |> Expect.equal "1affffffff"
-
-        -- Width 5: 64-bit path (hi=1 byte, lo=4 bytes)
+        -- Width 5–8: 64-bit path
         , test "positive 5-byte magnitude → 64-bit" <|
             \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "0100000000")) |> Expect.equal "1b0000000100000000"
-
-        -- Width 6: 64-bit path (hi=2 bytes, lo=4 bytes)
         , test "positive 6-byte magnitude → 64-bit" <|
             \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "010200000000")) |> Expect.equal "1b0000010200000000"
-
-        -- Width 7: 64-bit path (hi=3 bytes, lo=4 bytes)
         , test "positive 7-byte magnitude → 64-bit" <|
             \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "01020300000000")) |> Expect.equal "1b0001020300000000"
-
-        -- Width 8: full 64-bit
         , test "positive max 64-bit" <|
             \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "ffffffffffffffff")) |> Expect.equal "1bffffffffffffffff"
         , test "negative max 64-bit" <|
@@ -2367,57 +2343,23 @@ encodeBigIntTests =
             \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "0102030405060708090a0b0c0d0e0f10")) |> Expect.equal "c2500102030405060708090a0b0c0d0e0f10"
 
         -- Leading zero stripping
-        , test "strips leading zeros (small)" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "000005")) |> Expect.equal "05"
+        , test "strips leading zeros (small → 64-bit)" <|
+            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "000005")) |> Expect.equal "1b0000000000000005"
         , test "strips all zeros to value 0" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "0000")) |> Expect.equal "00"
+            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "0000")) |> Expect.equal "1b0000000000000000"
         , test "strips zeros across bignum→64-bit boundary" <|
             \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "0000ffffffffffffffff")) |> Expect.equal "1bffffffffffffffff"
-        , test "strips zeros across 64-bit→32-bit boundary" <|
-            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "00000000ffffffff")) |> Expect.equal "1affffffff"
+        , test "strips zeros across 64-bit→32-bit boundary still produces 64-bit" <|
+            \_ -> encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "0000ffffffff")) |> Expect.equal "1b00000000ffffffff"
 
-        -- Cross-check with CE.int
-        , test "matches CE.int for 10" <|
+        -- Encode→decode round-trip
+        -- bigInt always emits 64-bit, so decoded bytes are always 8 bytes
+        , test "round-trip: small magnitude (padded to 8 bytes)" <|
             \_ ->
-                encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "0a"))
-                    |> Expect.equal (encodeToHex (CE.int 10))
-        , test "matches CE.int for -10 (arg = 9)" <|
-            \_ ->
-                encodeToHex (CE.bigInt Negative (Hex.toBytesUnchecked "09"))
-                    |> Expect.equal (encodeToHex (CE.int -10))
-        , test "matches CE.int for 1000" <|
-            \_ ->
-                encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "03e8"))
-                    |> Expect.equal (encodeToHex (CE.int 1000))
-        , test "matches CE.int for 1000000" <|
-            \_ ->
-                encodeToHex (CE.bigInt Positive (Hex.toBytesUnchecked "0f4240"))
-                    |> Expect.equal (encodeToHex (CE.int 1000000))
-
-        -- Encode→decode round-trip (widths matching CBOR argument sizes)
-        , test "round-trip: 1-byte magnitude" <|
-            \_ ->
-                let
-                    magnitude : Bytes
-                    magnitude =
-                        Hex.toBytesUnchecked "ff"
-                in
-                CE.encode (CE.bigInt Positive magnitude)
+                CE.encode (CE.bigInt Positive (Hex.toBytesUnchecked "ff"))
                     |> CD.decode CD.bigInt
                     |> Result.map (\( s, bs ) -> ( s, Hex.fromBytes bs ))
-                    |> Expect.equal (Ok ( Positive, "ff" ))
-        , test "round-trip: 2-byte magnitude" <|
-            \_ ->
-                CE.encode (CE.bigInt Negative (Hex.toBytesUnchecked "0100"))
-                    |> CD.decode CD.bigInt
-                    |> Result.map (\( s, bs ) -> ( s, Hex.fromBytes bs ))
-                    |> Expect.equal (Ok ( Negative, "0100" ))
-        , test "round-trip: 4-byte magnitude" <|
-            \_ ->
-                CE.encode (CE.bigInt Positive (Hex.toBytesUnchecked "ffffffff"))
-                    |> CD.decode CD.bigInt
-                    |> Result.map (\( s, bs ) -> ( s, Hex.fromBytes bs ))
-                    |> Expect.equal (Ok ( Positive, "ffffffff" ))
+                    |> Expect.equal (Ok ( Positive, "00000000000000ff" ))
         , test "round-trip: 8-byte magnitude" <|
             \_ ->
                 CE.encode (CE.bigInt Negative (Hex.toBytesUnchecked "0100000000000000"))
