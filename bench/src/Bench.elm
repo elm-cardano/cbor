@@ -27,6 +27,7 @@ module Bench exposing
     , dec_fold30_def, dec_fold30_indef
     , dec_item_array100_def, dec_item_array100_indef
     , dec_item_map50_def, dec_item_map50_indef
+    , dec_array100_untilBreak
     )
 
 {-| Benchmarks for elm-cardano/cbor performance characteristics.
@@ -201,6 +202,18 @@ elm-bench -f Bench.dec_item_map50_def -f Bench.dec_item_map50_indef "()"
 @docs dec_fold30_def, dec_fold30_indef
 @docs dec_item_array100_def, dec_item_array100_indef
 @docs dec_item_map50_def, dec_item_map50_indef
+
+
+# untilBreak vs array (indefinite)
+
+Both decode the same indefinite-length 100-int array.
+`array` uses the internal loop; `untilBreak` uses the public helper after `arrayHeader`.
+
+```sh
+elm-bench -f Bench.dec_array100_indef -f Bench.dec_array100_untilBreak "()"
+```
+
+@docs dec_array100_untilBreak
 
 -}
 
@@ -1201,6 +1214,14 @@ dec_item_map50_def () =
 dec_item_map50_indef : () -> Maybe ()
 dec_item_map50_indef () =
     CD.decode CD.item map50strIndefData |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_array100_untilBreak : () -> Maybe (List Int)
+dec_array100_untilBreak () =
+    CD.decode
+        (CD.arrayHeader |> CD.andThen (\_ -> CD.untilBreak CD.int))
+        array100IndefData
+        |> Result.toMaybe
 
 
 dec_itemSkip_array100int : () -> Maybe ()
