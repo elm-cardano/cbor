@@ -3,7 +3,7 @@ module Cbor.Encode exposing
     , int, float, bool, null, undefined, maybe, string, bytes, simple
     , intWithWidth, floatWithWidth
     , stringChunked, bytesChunked
-    , Sort(..), list, array, map, associativeList, dict, tag, keyedRecord, sequence
+    , Sort(..), list, array, map, associativeList, dict, tagged, keyedRecord, sequence
     , item, rawUnsafe
     , deterministicSort, canonicalSort
     )
@@ -49,7 +49,7 @@ no separate strategy parameter is needed.
 
 ## Collections
 
-@docs Sort, list, array, map, associativeList, dict, tag, keyedRecord, sequence
+@docs Sort, list, array, map, associativeList, dict, tagged, keyedRecord, sequence
 
 
 ## Escape Hatches
@@ -479,8 +479,8 @@ dict sort len encodeKey encodeValue d =
 
 {-| Encode a CBOR semantic tag (major type 6).
 -}
-tag : Tag -> Encoder -> Encoder
-tag t (Encoder be) =
+tagged : Tag -> Encoder -> Encoder
+tagged t (Encoder be) =
     Encoder
         (BE.sequence
             [ encodeHeader 6 (tagToInt t)

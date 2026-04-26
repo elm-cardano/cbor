@@ -242,7 +242,7 @@ Cbor.Encode.bytesChunked : List Bytes -> Encoder
 -- Collections (strategy determines key ordering and definite/indefinite length)
 Cbor.Encode.array : List Encoder -> Encoder
 Cbor.Encode.map : List ( Encoder, Encoder ) -> Encoder
-Cbor.Encode.tag : Tag -> Encoder -> Encoder
+Cbor.Encode.tagged : Tag -> Encoder -> Encoder
 
 -- Record encoding (strategy determines key ordering and definite/indefinite length)
 -- Nothing entries are omitted from the output (optional field absent)

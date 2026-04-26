@@ -420,7 +420,7 @@ singleByte =
 
 oneOfFirstData : Bytes
 oneOfFirstData =
-    CE.encode (CE.tag (Unknown 121) (CE.list Definite CE.int [ 42 ]))
+    CE.encode (CE.tagged (Unknown 121) (CE.list Definite CE.int [ 42 ]))
 
 
 oneOfLastData : Bytes

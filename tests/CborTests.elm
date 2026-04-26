@@ -625,10 +625,10 @@ decodeMapTests =
 
 encodeTagTests : Test
 encodeTagTests =
-    describe "Cbor.Encode.tag"
-        [ test "tag 1 (epoch time)" <|
+    describe "Cbor.Encode.tagged"
+        [ test "tagged 1 (epoch time)" <|
             \_ ->
-                encodeToHex (CE.tag EpochDateTime (CE.int 1363896240))
+                encodeToHex (CE.tagged EpochDateTime (CE.int 1363896240))
                     |> Expect.equal "c11a514b67b0"
         ]
 

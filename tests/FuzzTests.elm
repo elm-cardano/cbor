@@ -134,7 +134,7 @@ roundTripProperties =
                     |> Expect.equal (Ok (List.sortBy Tuple.first unique))
         , fuzz Fuzz.int "tagged int" <|
             \n ->
-                CE.encode (CE.tag EpochDateTime (CE.int n))
+                CE.encode (CE.tagged EpochDateTime (CE.int n))
                     |> CD.decode (CD.tagged EpochDateTime CD.int)
                     |> Expect.equal (Ok n)
         ]
