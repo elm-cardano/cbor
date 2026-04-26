@@ -109,6 +109,7 @@ suite =
         , itemSkipTests
         , maybeTests
         , dictTests
+        , mapNTests
         ]
 
 
@@ -2618,6 +2619,45 @@ maybeTests =
                     decodeFromHex (CD.array (CD.maybe CD.int)) "83f601f6"
                         |> Expect.equal (Ok [ Nothing, Just 1, Nothing ])
             ]
+        ]
+
+
+mapNTests : Test
+mapNTests =
+    describe "map3/map4/map5"
+        [ test "map3" <|
+            \_ ->
+                decodeFromHex
+                    (CD.map3 (\a b c -> ( a, b, c ))
+                        CD.int
+                        CD.string
+                        CD.bool
+                    )
+                    (encodeToHex (CE.sequence [ CE.int 1, CE.string "hello", CE.bool True ]))
+                    |> Expect.equal (Ok ( 1, "hello", True ))
+        , test "map4" <|
+            \_ ->
+                decodeFromHex
+                    (CD.map4 (\a b c d -> { a = a, b = b, c = c, d = d })
+                        CD.int
+                        CD.string
+                        CD.bool
+                        CD.int
+                    )
+                    (encodeToHex (CE.sequence [ CE.int 1, CE.string "hi", CE.bool False, CE.int 42 ]))
+                    |> Expect.equal (Ok { a = 1, b = "hi", c = False, d = 42 })
+        , test "map5" <|
+            \_ ->
+                decodeFromHex
+                    (CD.map5 (\a b c d e -> { a = a, b = b, c = c, d = d, e = e })
+                        CD.int
+                        CD.string
+                        CD.bool
+                        CD.int
+                        CD.string
+                    )
+                    (encodeToHex (CE.sequence [ CE.int 1, CE.string "hi", CE.bool True, CE.int 99, CE.string "bye" ]))
+                    |> Expect.equal (Ok { a = 1, b = "hi", c = True, d = 99, e = "bye" })
         ]
 
 

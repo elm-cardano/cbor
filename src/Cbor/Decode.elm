@@ -2,7 +2,7 @@ module Cbor.Decode exposing
     ( CborDecoder, decode
     , errorToString
     , succeed, fail
-    , map, map2, andThen, oneOf, keep, ignore, lazy
+    , map, map2, map3, map4, map5, andThen, oneOf, keep, ignore, lazy
     , int, bigInt, float, bool, null, maybe, string, bytes
     , array, associativeList, dict, field, foldEntries, tag
     , RecordBuilder, record, element, optionalElement, ExtraElements(..), buildRecord
@@ -45,7 +45,7 @@ Run them with `decode`.
 ## Combinators
 
 @docs succeed, fail
-@docs map, map2, andThen, oneOf, keep, ignore, lazy
+@docs map, map2, map3, map4, map5, andThen, oneOf, keep, ignore, lazy
 
 
 ## Primitives
@@ -125,6 +125,11 @@ toBD decoder =
 decode : CborDecoder ctx a -> Bytes.Bytes -> Result (BD.Error ctx DecodeError) a
 decode decoder input =
     BD.decode (toBD decoder) input
+
+
+apply : (a -> b) -> a -> b
+apply g x =
+    g x
 
 
 
@@ -233,6 +238,27 @@ map2 f decoderA decoderB =
 
                 Pure bdB ->
                     Pure (BD.map2 f bdA bdB)
+
+
+{-| Combine three decoders sequentially.
+-}
+map3 : (a -> b -> c -> d) -> CborDecoder ctx a -> CborDecoder ctx b -> CborDecoder ctx c -> CborDecoder ctx d
+map3 f decoderA decoderB decoderC =
+    map2 apply (map2 f decoderA decoderB) decoderC
+
+
+{-| Combine four decoders sequentially.
+-}
+map4 : (a -> b -> c -> d -> e) -> CborDecoder ctx a -> CborDecoder ctx b -> CborDecoder ctx c -> CborDecoder ctx d -> CborDecoder ctx e
+map4 f decoderA decoderB decoderC decoderD =
+    map2 apply (map3 f decoderA decoderB decoderC) decoderD
+
+
+{-| Combine five decoders sequentially.
+-}
+map5 : (a -> b -> c -> d -> e -> f) -> CborDecoder ctx a -> CborDecoder ctx b -> CborDecoder ctx c -> CborDecoder ctx d -> CborDecoder ctx e -> CborDecoder ctx f
+map5 fn decoderA decoderB decoderC decoderD decoderE =
+    map2 apply (map4 fn decoderA decoderB decoderC decoderD) decoderE
 
 
 {-| Chain decoders. The continuation is chosen based on the first result.
