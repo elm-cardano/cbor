@@ -9,7 +9,7 @@ module Cbor.Decode exposing
     , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
     , UnorderedRecordBuilder, unorderedRecord, onKey, buildUnorderedRecord
     , arrayHeader, mapHeader
-    , item, itemSkip
+    , item, itemSkip, rawBytes
     )
 
 {-| CBOR decoding combinators.
@@ -80,13 +80,14 @@ Run them with `decode`.
 
 ## Escape Hatch
 
-@docs item, itemSkip
+@docs item, itemSkip, rawBytes
 
 -}
 
 import Bytes
 import Bytes.Decoder as BD
 import Cbor exposing (CborItem, DecodeError(..), Sign, Tag)
+import Cbor.Encode as CE
 import Dict exposing (Dict)
 import Internal.Cbor.Decode as Inner exposing (u8)
 
@@ -1248,3 +1249,15 @@ throughout, staying entirely in the fast lane.
 itemSkip : CborDecoder ctx ()
 itemSkip =
     Item Inner.skip
+
+
+{-| Decode any well-formed CBOR data item and return its raw bytes.
+
+Internally this decodes the item with [`item`](#item) and re-encodes it
+with `Cbor.Encode.item`. There is no way to slice the source bytes directly,
+which would be faster in general due to allocation costs of small bytes slices.
+
+-}
+rawBytes : CborDecoder ctx Bytes.Bytes
+rawBytes =
+    map (\cborItem -> CE.encode (CE.item cborItem)) item

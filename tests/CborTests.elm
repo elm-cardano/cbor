@@ -110,6 +110,7 @@ suite =
         , maybeTests
         , dictTests
         , mapNTests
+        , rawTests
         ]
 
 
@@ -2706,4 +2707,51 @@ dictTests =
                     decodeFromHex (CD.dict CD.int CD.string) encoded
                         |> Expect.equal (Ok original)
             ]
+        ]
+
+
+rawTests : Test
+rawTests =
+    describe "Cbor.Decode.rawBytes"
+        [ test "integer" <|
+            \_ ->
+                decodeFromHex CD.rawBytes "18ff"
+                    |> Result.map Hex.fromBytes
+                    |> Expect.equal (Ok "18ff")
+        , test "string" <|
+            \_ ->
+                -- "hello" = 65 68656c6c6f
+                decodeFromHex CD.rawBytes "6568656c6c6f"
+                    |> Result.map Hex.fromBytes
+                    |> Expect.equal (Ok "6568656c6c6f")
+        , test "nested array" <|
+            \_ ->
+                let
+                    hex : String
+                    hex =
+                        encodeToHex (CE.array Definite [ CE.int 1, CE.string "hi", CE.bool True ])
+                in
+                decodeFromHex CD.rawBytes hex
+                    |> Result.map Hex.fromBytes
+                    |> Expect.equal (Ok hex)
+        , test "nested map" <|
+            \_ ->
+                let
+                    hex : String
+                    hex =
+                        encodeToHex (CE.map CE.Unsorted Definite [ ( CE.int 1, CE.string "a" ) ])
+                in
+                decodeFromHex CD.rawBytes hex
+                    |> Result.map Hex.fromBytes
+                    |> Expect.equal (Ok hex)
+        , test "raw inside array" <|
+            \_ ->
+                let
+                    hex : String
+                    hex =
+                        encodeToHex (CE.sequence [ CE.int 1, CE.string "hi" ])
+                in
+                decodeFromHex (CD.map2 Tuple.pair CD.rawBytes CD.rawBytes) hex
+                    |> Result.map (\( a, b ) -> ( Hex.fromBytes a, Hex.fromBytes b ))
+                    |> Expect.equal (Ok ( "01", "626869" ))
         ]
