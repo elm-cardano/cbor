@@ -3,7 +3,7 @@ module Cbor.Encode exposing
     , int, float, bool, null, undefined, maybe, string, bytes, simple
     , intWithWidth, floatWithWidth
     , stringChunked, bytesChunked
-    , Sort(..), array, map, associativeList, dict, tag, keyedRecord, list, sequence
+    , Sort(..), list, array, map, associativeList, dict, tag, keyedRecord, sequence
     , item, rawUnsafe
     , deterministicSort, canonicalSort
     )
@@ -49,7 +49,7 @@ no separate strategy parameter is needed.
 
 ## Collections
 
-@docs Sort, array, map, associativeList, dict, tag, keyedRecord, list, sequence
+@docs Sort, list, array, map, associativeList, dict, tag, keyedRecord, sequence
 
 
 ## Escape Hatches
@@ -329,6 +329,7 @@ encodeByteChunk bs =
 
 
 {-| Encode a list of items using the same element encoder.
+This is a helper function for [`array`](#array) when all elements are of the same type.
 -}
 list : Length -> (a -> Encoder) -> List a -> Encoder
 list len encodeElement items =
