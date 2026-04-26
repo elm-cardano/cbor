@@ -779,7 +779,7 @@ enc_map_canonical_str100 () =
 
 enc_map_10 : () -> Bytes
 enc_map_10 () =
-    CE.encode (CE.map CE.Unsorted Definite (List.map (\( k, v ) -> ( CE.int k, CE.int v )) pairsInt10))
+    CE.encode (CE.associativeList CE.Unsorted Definite CE.int CE.int pairsInt10)
 
 
 enc_dict_10 : () -> Bytes
@@ -789,7 +789,7 @@ enc_dict_10 () =
 
 enc_map_100 : () -> Bytes
 enc_map_100 () =
-    CE.encode (CE.map CE.Unsorted Definite (List.map (\( k, v ) -> ( CE.int k, CE.int v )) pairsInt100))
+    CE.encode (CE.associativeList CE.Unsorted Definite CE.int CE.int pairsInt100)
 
 
 enc_dict_100 : () -> Bytes
@@ -799,7 +799,7 @@ enc_dict_100 () =
 
 enc_map_1000 : () -> Bytes
 enc_map_1000 () =
-    CE.encode (CE.map CE.Unsorted Definite (List.map (\( k, v ) -> ( CE.int k, CE.int v )) pairsInt1000))
+    CE.encode (CE.associativeList CE.Unsorted Definite CE.int CE.int pairsInt1000)
 
 
 enc_dict_1000 : () -> Bytes

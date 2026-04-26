@@ -3,7 +3,7 @@ module Cbor.Encode exposing
     , int, float, bool, null, undefined, maybe, string, bytes, simple
     , intWithWidth, floatWithWidth
     , stringChunked, bytesChunked
-    , Sort(..), array, map, dict, tag, keyedRecord, list, sequence
+    , Sort(..), array, map, associativeList, dict, tag, keyedRecord, list, sequence
     , item, rawUnsafe
     , deterministicSort, canonicalSort
     )
@@ -49,7 +49,7 @@ no separate strategy parameter is needed.
 
 ## Collections
 
-@docs Sort, array, map, dict, tag, keyedRecord, list, sequence
+@docs Sort, array, map, associativeList, dict, tag, keyedRecord, list, sequence
 
 
 ## Escape Hatches
@@ -405,6 +405,23 @@ map sort len entries =
                         entries
             in
             buildSortedMap5 len count taggedEntries
+
+
+{-| Encode an associative list as a CBOR map (major type 5).
+
+This is a convenience wrapper around [`map`](#map) that takes encoder
+functions for keys and values instead of pre-built encoder pairs.
+
+    CE.associativeList CE.Unsorted
+        Definite
+        CE.int
+        CE.string
+        [ ( 1, "Alice" ), ( 2, "Bob" ) ]
+
+-}
+associativeList : Sort comparable -> Length -> (k -> Encoder) -> (v -> Encoder) -> List ( k, v ) -> Encoder
+associativeList sort len encodeKey encodeValue entries =
+    map sort len (List.map (\( k, v ) -> ( encodeKey k, encodeValue v )) entries)
 
 
 {-| Encode a `Dict` as a CBOR map (major type 5).
