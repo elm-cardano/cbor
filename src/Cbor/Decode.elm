@@ -31,6 +31,13 @@ Run them with `decode`.
 
     -- To run: CD.decode decodePerson someBytes
 
+**Note:** These decoders operate on a complete `Bytes` value. They cannot
+incrementally decode a stream of chunks as they arrive. If you are receiving
+CBOR data in multiple chunks (e.g. from a network stream), you must first
+concatenate all chunks into a single `Bytes` value before calling `decode`.
+If incremental / streaming decoding becomes necessary, it can be added in a
+future release.
+
 
 ## Type
 
