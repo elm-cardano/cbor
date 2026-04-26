@@ -1,6 +1,6 @@
 module Internal.Cbor.Decode exposing
     ( Decoder
-    , int, bigInt, float, bool, null, string, bytes
+    , int, bigInt, float, bool, null, maybe, string, bytes
     , item, skip, skipFull, skipNFull, skipIndefinite, skipEntries
     , mapHeader, arrayHeader
     , array, associativeList, entryLoop, tag
@@ -563,6 +563,23 @@ null default initialByte =
 
         _ ->
             BD.fail (WrongInitialByte { got = initialByte })
+
+
+{-| Decode a nullable value: null (0xF6) or undefined (0xF7) become
+`Nothing`, anything else is decoded with the inner decoder and wrapped
+in `Just`.
+-}
+maybe : Decoder ctx a -> Decoder ctx (Maybe a)
+maybe inner initialByte =
+    case initialByte of
+        0xF6 ->
+            BD.succeed Nothing
+
+        0xF7 ->
+            BD.succeed Nothing
+
+        _ ->
+            inner initialByte |> BD.map Just
 
 
 {-| Decode a CBOR text string (major type 3).
@@ -1287,7 +1304,6 @@ type alias KeyedState k a =
     , pendingKey : Maybe k
     , value : a
     }
-
 
 
 {-| Expect a break byte (0xFF) or fail with `TooManyElements`.

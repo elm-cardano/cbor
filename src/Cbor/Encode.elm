@@ -1,9 +1,9 @@
 module Cbor.Encode exposing
     ( Encoder, encode
-    , int, float, bool, null, undefined, string, bytes, simple
+    , int, float, bool, null, undefined, maybe, string, bytes, simple
     , intWithWidth, floatWithWidth
     , stringChunked, bytesChunked
-    , Sort(..), array, map, tag, keyedRecord, list, sequence
+    , Sort(..), array, map, dict, tag, keyedRecord, list, sequence
     , item, rawUnsafe
     , deterministicSort, canonicalSort
     )
@@ -34,7 +34,7 @@ no separate strategy parameter is needed.
 
 ## Primitives
 
-@docs int, float, bool, null, undefined, string, bytes, simple
+@docs int, float, bool, null, undefined, maybe, string, bytes, simple
 
 
 ## Explicit Width Control
@@ -49,7 +49,7 @@ no separate strategy parameter is needed.
 
 ## Collections
 
-@docs Sort, array, map, tag, keyedRecord, list, sequence
+@docs Sort, array, map, dict, tag, keyedRecord, list, sequence
 
 
 ## Escape Hatches
@@ -70,6 +70,7 @@ import Bytes.Encode as BE
 import Bytes.Floating.Decode
 import Bytes.Floating.Encode
 import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), Tag, tagToInt)
+import Dict exposing (Dict)
 import Hex
 
 
@@ -171,6 +172,19 @@ null =
 undefined : Encoder
 undefined =
     Encoder (BE.unsignedInt8 0xF7)
+
+
+{-| Encode a `Maybe` value: `Nothing` becomes CBOR null, `Just x` is encoded
+with the given encoder.
+-}
+maybe : (a -> Encoder) -> Maybe a -> Encoder
+maybe encodeValue m =
+    case m of
+        Just a ->
+            encodeValue a
+
+        Nothing ->
+            null
 
 
 {-| Encode a UTF-8 text string (major type 3).
@@ -391,6 +405,13 @@ map sort len entries =
                         |> List.map Tuple.second
             in
             buildMap5 len (List.length entries) flatEntries
+
+
+{-| Encode a `Dict` as a CBOR map (major type 5).
+-}
+dict : Sort comparable2 -> Length -> (k -> Encoder) -> (v -> Encoder) -> Dict k v -> Encoder
+dict sort len encodeKey encodeValue d =
+    map sort len (List.map (\( k, v ) -> ( encodeKey k, encodeValue v )) (Dict.toList d))
 
 
 {-| Encode a CBOR semantic tag (major type 6).

@@ -5,6 +5,7 @@ import Bytes.Decoder as BD
 import Cbor exposing (CborItem(..), DecodeError(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), diagnose)
 import Cbor.Decode as CD
 import Cbor.Encode as CE
+import Dict
 import Expect
 import Hex
 import Test exposing (Test, describe, test)
@@ -106,6 +107,8 @@ suite =
         , rawUnsafeTests
         , simpleValueTests
         , itemSkipTests
+        , maybeTests
+        , dictTests
         ]
 
 
@@ -2544,4 +2547,123 @@ itemSkipTests =
                 in
                 decodeFromHex decoder "821903e81903e8"
                     |> Expect.equal (Ok 1000)
+        ]
+
+
+maybeTests : Test
+maybeTests =
+    describe "maybe"
+        [ describe "Cbor.Encode.maybe"
+            [ test "Just encodes the value" <|
+                \_ ->
+                    encodeToHex (CE.maybe CE.int (Just 42))
+                        |> Expect.equal (encodeToHex (CE.int 42))
+            , test "Nothing encodes as null" <|
+                \_ ->
+                    encodeToHex (CE.maybe CE.int Nothing)
+                        |> Expect.equal "f6"
+            , test "Just string" <|
+                \_ ->
+                    encodeToHex (CE.maybe CE.string (Just "hi"))
+                        |> Expect.equal (encodeToHex (CE.string "hi"))
+            ]
+        , describe "Cbor.Decode.maybe"
+            [ test "null decodes as Nothing" <|
+                \_ ->
+                    decodeFromHex (CD.maybe CD.int) "f6"
+                        |> Expect.equal (Ok Nothing)
+            , test "undefined decodes as Nothing" <|
+                \_ ->
+                    decodeFromHex (CD.maybe CD.int) "f7"
+                        |> Expect.equal (Ok Nothing)
+            , test "value decodes as Just" <|
+                \_ ->
+                    decodeFromHex (CD.maybe CD.int) "182a"
+                        |> Expect.equal (Ok (Just 42))
+            , test "string value decodes as Just" <|
+                \_ ->
+                    decodeFromHex (CD.maybe CD.string) "6249454546"
+                        -- "IEEF" is 4 chars but let's use "hi"
+                        |> Result.map (\v -> v /= Nothing)
+                        |> Expect.equal (Ok True)
+            , test "bool true decodes as Just True" <|
+                \_ ->
+                    decodeFromHex (CD.maybe CD.bool) "f5"
+                        |> Expect.equal (Ok (Just True))
+            , test "bool false decodes as Just False" <|
+                \_ ->
+                    decodeFromHex (CD.maybe CD.bool) "f4"
+                        |> Expect.equal (Ok (Just False))
+            , test "round-trip Just" <|
+                \_ ->
+                    let
+                        encoded : String
+                        encoded =
+                            encodeToHex (CE.maybe CE.int (Just 7))
+                    in
+                    decodeFromHex (CD.maybe CD.int) encoded
+                        |> Expect.equal (Ok (Just 7))
+            , test "round-trip Nothing" <|
+                \_ ->
+                    let
+                        encoded : String
+                        encoded =
+                            encodeToHex (CE.maybe CE.int Nothing)
+                    in
+                    decodeFromHex (CD.maybe CD.int) encoded
+                        |> Expect.equal (Ok Nothing)
+            , test "inside array" <|
+                \_ ->
+                    -- [null, 1, null] decoded as list of Maybe Int
+                    decodeFromHex (CD.array (CD.maybe CD.int)) "83f601f6"
+                        |> Expect.equal (Ok [ Nothing, Just 1, Nothing ])
+            ]
+        ]
+
+
+dictTests : Test
+dictTests =
+    describe "dict"
+        [ describe "Cbor.Encode.dict"
+            [ test "empty dict" <|
+                \_ ->
+                    encodeToHex (CE.dict CE.Unsorted Definite CE.int CE.string Dict.empty)
+                        |> Expect.equal "a0"
+            , test "{1: \"a\", 2: \"b\"}" <|
+                \_ ->
+                    -- Dict.toList produces sorted keys: [(1,"a"), (2,"b")]
+                    encodeToHex (CE.dict CE.Unsorted Definite CE.int CE.string (Dict.fromList [ ( 1, "a" ), ( 2, "b" ) ]))
+                        |> Expect.equal "a2016161026162"
+            , test "indefinite dict" <|
+                \_ ->
+                    encodeToHex (CE.dict CE.Unsorted Indefinite CE.int CE.string (Dict.fromList [ ( 1, "a" ) ]))
+                        |> Expect.equal "bf016161ff"
+            ]
+        , describe "Cbor.Decode.dict"
+            [ test "empty map" <|
+                \_ ->
+                    decodeFromHex (CD.dict CD.int CD.string) "a0"
+                        |> Expect.equal (Ok Dict.empty)
+            , test "{1: \"a\", 2: \"b\"}" <|
+                \_ ->
+                    decodeFromHex (CD.dict CD.int CD.string) "a2016161026162"
+                        |> Expect.equal (Ok (Dict.fromList [ ( 1, "a" ), ( 2, "b" ) ]))
+            , test "indefinite map" <|
+                \_ ->
+                    decodeFromHex (CD.dict CD.int CD.string) "bf016161026162ff"
+                        |> Expect.equal (Ok (Dict.fromList [ ( 1, "a" ), ( 2, "b" ) ]))
+            , test "round-trip" <|
+                \_ ->
+                    let
+                        original : Dict.Dict Int String
+                        original =
+                            Dict.fromList [ ( 10, "x" ), ( 20, "y" ), ( 30, "z" ) ]
+
+                        encoded : String
+                        encoded =
+                            encodeToHex (CE.dict CE.Unsorted Definite CE.int CE.string original)
+                    in
+                    decodeFromHex (CD.dict CD.int CD.string) encoded
+                        |> Expect.equal (Ok original)
+            ]
         ]

@@ -3,8 +3,8 @@ module Cbor.Decode exposing
     , errorToString
     , succeed, fail
     , map, map2, andThen, oneOf, keep, ignore, lazy
-    , int, bigInt, float, bool, null, string, bytes
-    , array, associativeList, field, foldEntries, tag
+    , int, bigInt, float, bool, null, maybe, string, bytes
+    , array, associativeList, dict, field, foldEntries, tag
     , RecordBuilder, record, element, optionalElement, ExtraElements(..), buildRecord
     , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
     , UnorderedRecordBuilder, unorderedRecord, onKey, buildUnorderedRecord
@@ -50,12 +50,12 @@ Run them with `decode`.
 
 ## Primitives
 
-@docs int, bigInt, float, bool, null, string, bytes
+@docs int, bigInt, float, bool, null, maybe, string, bytes
 
 
 ## Collections
 
-@docs array, associativeList, field, foldEntries, tag
+@docs array, associativeList, dict, field, foldEntries, tag
 
 
 ## Record Builder (CBOR arrays → Elm values)
@@ -378,6 +378,15 @@ null default =
     Item (Inner.null default)
 
 
+{-| Decode a nullable value: CBOR null (0xF6) or undefined (0xF7) become
+`Nothing`, anything else is decoded with the inner decoder and wrapped
+in `Just`.
+-}
+maybe : CborDecoder ctx a -> CborDecoder ctx (Maybe a)
+maybe decoder =
+    Item (Inner.maybe (unwrap decoder))
+
+
 {-| Decode a CBOR text string (major type 3).
 
 Concatenates indefinite-length chunks transparently.
@@ -446,6 +455,16 @@ associativeList keyDecoder valueDecoder =
                     u8 |> BD.andThen keyBody
             in
             Item (Inner.associativeList keyBD keyBody valueBD)
+
+
+{-| Decode a CBOR map (major type 5) into a `Dict`.
+
+The key decoder must produce `comparable` values.
+
+-}
+dict : CborDecoder ctx comparable -> CborDecoder ctx v -> CborDecoder ctx (Dict comparable v)
+dict keyDecoder valueDecoder =
+    map Dict.fromList (associativeList keyDecoder valueDecoder)
 
 
 {-| Decode the next map entry, expecting a specific key.
@@ -1110,28 +1129,28 @@ processIndefiniteEntry config acc byte =
 
         _ ->
             config.keyInner byte
-            |> BD.andThen
-                (\key ->
-                    case Dict.get key config.handlers of
-                        Just handler ->
-                            handler
-                                |> BD.andThen
-                                    (\update ->
-                                        u8 |> BD.andThen (processIndefiniteEntry config (update acc))
-                                    )
+                |> BD.andThen
+                    (\key ->
+                        case Dict.get key config.handlers of
+                            Just handler ->
+                                handler
+                                    |> BD.andThen
+                                        (\update ->
+                                            u8 |> BD.andThen (processIndefiniteEntry config (update acc))
+                                        )
 
-                        Nothing ->
-                            case config.extra of
-                                IgnoreExtra ->
-                                    Inner.skipFull
-                                        |> BD.andThen
-                                            (\() ->
-                                                u8 |> BD.andThen (processIndefiniteEntry config acc)
-                                            )
+                            Nothing ->
+                                case config.extra of
+                                    IgnoreExtra ->
+                                        Inner.skipFull
+                                            |> BD.andThen
+                                                (\() ->
+                                                    u8 |> BD.andThen (processIndefiniteEntry config acc)
+                                                )
 
-                                FailOnExtra ->
-                                    BD.fail (TooManyElements Nothing)
-                )
+                                    FailOnExtra ->
+                                        BD.fail (TooManyElements Nothing)
+                    )
 
 
 processDefiniteEntry : Int -> MapConfig ctx comparable acc a -> acc -> BD.Decoder ctx DecodeError a
