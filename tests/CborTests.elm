@@ -1,8 +1,7 @@
 module CborTests exposing (suite)
 
 import Bytes
-import Bytes.Decoder as BD
-import Cbor exposing (CborItem(..), DecodeError(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), diagnose)
+import Cbor exposing (CborItem(..), DecodeError(..), Error(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..), diagnose)
 import Cbor.Decode as CD
 import Cbor.Encode as CE
 import Dict
@@ -20,14 +19,14 @@ encodeToHex encoder =
 
 {-| Helper: decode from hex using a given CborDecoder.
 -}
-decodeFromHex : CD.CborDecoder ctx a -> String -> Result (BD.Error ctx DecodeError) a
+decodeFromHex : CD.CborDecoder ctx a -> String -> Result (Error ctx) a
 decodeFromHex decoder hex =
     CD.decode decoder (Hex.toBytesUnchecked hex)
 
 
-{-| Extract the DecodeError variant from a BD.Error, ignoring position info.
+{-| Extract the DecodeError variant from an Error, ignoring position info.
 -}
-extractError : Result (BD.Error ctx DecodeError) a -> Maybe DecodeError
+extractError : Result (Error ctx) a -> Maybe DecodeError
 extractError result =
     case result of
         Err err ->
@@ -37,19 +36,19 @@ extractError result =
             Nothing
 
 
-extractErrorHelp : BD.Error ctx DecodeError -> Maybe DecodeError
+extractErrorHelp : Error ctx -> Maybe DecodeError
 extractErrorHelp err =
     case err of
-        BD.Custom _ e ->
+        DecodingError _ e ->
             Just e
 
-        BD.InContext _ inner ->
+        InContext _ inner ->
             extractErrorHelp inner
 
-        BD.BadOneOf _ errors ->
+        BadOneOf _ errors ->
             List.filterMap extractErrorHelp errors |> List.head
 
-        BD.OutOfBounds _ ->
+        OutOfBounds _ ->
             Nothing
 
 

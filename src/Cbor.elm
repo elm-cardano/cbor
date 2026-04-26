@@ -1,6 +1,6 @@
 module Cbor exposing
     ( CborItem(..), IntWidth(..), FloatWidth(..), SimpleWidth(..), Length(..), Sign(..), Tag(..), tagToInt, intToTag
-    , DecodeError(..)
+    , Error(..), DecodeError(..)
     , diagnose
     )
 
@@ -10,7 +10,7 @@ This module defines `CborItem`, a lossless representation of any well-formed
 CBOR encoding per [RFC 8949](https://datatracker.ietf.org/doc/html/rfc8949).
 
 @docs CborItem, IntWidth, FloatWidth, SimpleWidth, Length, Sign, Tag, tagToInt, intToTag
-@docs DecodeError
+@docs Error, DecodeError
 @docs diagnose
 
 -}
@@ -137,7 +137,22 @@ type Tag
 -- DECODE ERRORS
 
 
-{-| Structured error type for CBOR decoding failures.
+{-| Structured error returned by `Cbor.Decode.decode`.
+
+  - `InContext` — a nested error with a context label and byte offset.
+  - `OutOfBounds` — the decoder ran past the end of the input.
+  - `DecodingError` — a CBOR-specific error at a byte offset.
+  - `BadOneOf` — all branches of a `oneOf` failed.
+
+-}
+type Error context
+    = InContext { label : context, start : Int } (Error context)
+    | OutOfBounds { at : Int, bytes : Int }
+    | DecodingError { at : Int } DecodeError
+    | BadOneOf { at : Int } (List (Error context))
+
+
+{-| CBOR-specific decoding error.
 -}
 type DecodeError
     = WrongMajorType { expected : Int, got : Int }

@@ -2,7 +2,7 @@ module Cbor.Decode exposing
     ( CborDecoder, decode
     , errorToString
     , succeed, fail
-    , map, map2, map3, map4, map5, andThen, oneOf, keep, ignore, lazy
+    , map, map2, map3, map4, map5, andThen, oneOf, keep, ignore, lazy, inContext
     , int, bigInt, float, bool, null, undefined, maybe, simple, string, bytes
     , array, associativeList, dict, field, foldEntries, tag, tagged
     , RecordBuilder, record, element, optionalElement, ExtraElements(..), buildRecord
@@ -52,7 +52,7 @@ future release.
 ## Combinators
 
 @docs succeed, fail
-@docs map, map2, map3, map4, map5, andThen, oneOf, keep, ignore, lazy
+@docs map, map2, map3, map4, map5, andThen, oneOf, keep, ignore, lazy, inContext
 
 
 ## Primitives
@@ -93,7 +93,7 @@ future release.
 
 import Bytes
 import Bytes.Decoder as BD
-import Cbor exposing (CborItem, DecodeError(..), Sign, Tag)
+import Cbor exposing (CborItem, DecodeError(..), Error(..), Sign, Tag)
 import Cbor.Encode as CE
 import Dict exposing (Dict)
 import Internal.Cbor.Decode as Inner exposing (u8)
@@ -130,9 +130,26 @@ toBD decoder =
 
 {-| Run a `CborDecoder` on some `Bytes`.
 -}
-decode : CborDecoder ctx a -> Bytes.Bytes -> Result (BD.Error ctx DecodeError) a
+decode : CborDecoder ctx a -> Bytes.Bytes -> Result (Error ctx) a
 decode decoder input =
     BD.decode (toBD decoder) input
+        |> Result.mapError fromBDError
+
+
+fromBDError : BD.Error ctx DecodeError -> Error ctx
+fromBDError err =
+    case err of
+        BD.InContext info nested ->
+            InContext info (fromBDError nested)
+
+        BD.OutOfBounds info ->
+            OutOfBounds info
+
+        BD.Custom info decodeError ->
+            DecodingError info decodeError
+
+        BD.BadOneOf info errors ->
+            BadOneOf info (List.map fromBDError errors)
 
 
 apply : (a -> b) -> a -> b
@@ -144,10 +161,33 @@ apply g x =
 -- ERRORS
 
 
-{-| Convert a `DecodeError` to a human-readable string.
+{-| Convert an `Error` to a human-readable string.
+
+Provide a function to display context labels. If your decoder does not use
+`inContext`, you can pass `always ""`.
+
 -}
-errorToString : DecodeError -> String
-errorToString err =
+errorToString : (context -> String) -> Error context -> String
+errorToString contextToString err =
+    case err of
+        InContext { label, start } nested ->
+            "At byte " ++ String.fromInt start ++ " in " ++ contextToString label ++ ": " ++ errorToString contextToString nested
+
+        OutOfBounds info ->
+            "Out of bounds at byte " ++ String.fromInt info.at ++ " (input is " ++ String.fromInt info.bytes ++ " bytes)"
+
+        DecodingError { at } decodeError ->
+            "At byte " ++ String.fromInt at ++ ": " ++ decodeErrorToString decodeError
+
+        BadOneOf { at } errors ->
+            "At byte "
+                ++ String.fromInt at
+                ++ ": no matching decoder in oneOf. Tried:\n"
+                ++ String.join "\n" (List.map (\e -> "  - " ++ errorToString contextToString e) errors)
+
+
+decodeErrorToString : DecodeError -> String
+decodeErrorToString err =
     case err of
         WrongMajorType { expected, got } ->
             "Expected major type " ++ String.fromInt expected ++ " but got " ++ String.fromInt got
@@ -364,6 +404,26 @@ lazy thunk =
                 Pure bd ->
                     bd
         )
+
+
+{-| Add context to a decoder for better error messages.
+
+If the decoder fails, the error will be wrapped with the given label and
+the byte offset where decoding started.
+
+    decodePerson : CD.CborDecoder String Person
+    decodePerson =
+        CD.inContext "Person"
+            (CD.keyedRecord CD.int String.fromInt Person
+                |> CD.required 0 (CD.inContext "name" CD.string)
+                |> CD.required 1 (CD.inContext "age" CD.int)
+                |> CD.buildKeyedRecord CD.IgnoreExtra
+            )
+
+-}
+inContext : ctx -> CborDecoder ctx a -> CborDecoder ctx a
+inContext label decoder =
+    Pure (BD.inContext label (toBD decoder))
 
 
 
