@@ -112,6 +112,8 @@ suite =
         , mapNTests
         , rawTests
         , indefiniteHelperTests
+        , decodeUndefinedTests
+        , decodeSimpleTests
         ]
 
 
@@ -2929,4 +2931,89 @@ indefiniteHelperTests =
                     )
                     "bfff182a"
                     |> Expect.equal (Ok ( [], 42 ))
+        ]
+
+
+decodeUndefinedTests : Test
+decodeUndefinedTests =
+    describe "Cbor.Decode.undefined"
+        [ test "undefined with custom default" <|
+            \_ ->
+                -- 0xf7 = undefined
+                decodeFromHex (CD.undefined "default") "f7"
+                    |> Expect.equal (Ok "default")
+        , test "rejects null byte" <|
+            \_ ->
+                -- 0xf6 = null, not undefined
+                decodeFromHex (CD.undefined ()) "f6"
+                    |> extractError
+                    |> Expect.equal (Just (WrongInitialByte { got = 0xF6 }))
+        , test "rejects non-major-type-7" <|
+            \_ ->
+                -- 0x00 = integer 0
+                decodeFromHex (CD.undefined ()) "00"
+                    |> extractError
+                    |> Expect.equal (Just (WrongInitialByte { got = 0x00 }))
+        , test "rejects bool true" <|
+            \_ ->
+                decodeFromHex (CD.undefined ()) "f5"
+                    |> extractError
+                    |> Expect.equal (Just (WrongInitialByte { got = 0xF5 }))
+        ]
+
+
+decodeSimpleTests : Test
+decodeSimpleTests =
+    describe "Cbor.Decode.simple"
+        [ test "simple 0 (inline)" <|
+            \_ ->
+                -- 0xe0 = major type 7, additional info 0
+                decodeFromHex CD.simple "e0"
+                    |> Expect.equal (Ok 0)
+        , test "simple 19 (max inline)" <|
+            \_ ->
+                -- 0xf3 = major type 7, additional info 19
+                decodeFromHex CD.simple "f3"
+                    |> Expect.equal (Ok 19)
+        , test "simple 32 (one-byte form)" <|
+            \_ ->
+                -- 0xf8 0x20 = major type 7, additional info 24, value 32
+                decodeFromHex CD.simple "f820"
+                    |> Expect.equal (Ok 32)
+        , test "simple 255 (one-byte form)" <|
+            \_ ->
+                decodeFromHex CD.simple "f8ff"
+                    |> Expect.equal (Ok 255)
+        , test "rejects bool false (additional info 20)" <|
+            \_ ->
+                decodeFromHex CD.simple "f4"
+                    |> extractError
+                    |> Expect.equal (Just (WrongInitialByte { got = 0xF4 }))
+        , test "rejects bool true (additional info 21)" <|
+            \_ ->
+                decodeFromHex CD.simple "f5"
+                    |> extractError
+                    |> Expect.equal (Just (WrongInitialByte { got = 0xF5 }))
+        , test "rejects null (additional info 22)" <|
+            \_ ->
+                decodeFromHex CD.simple "f6"
+                    |> extractError
+                    |> Expect.equal (Just (WrongInitialByte { got = 0xF6 }))
+        , test "rejects undefined (additional info 23)" <|
+            \_ ->
+                decodeFromHex CD.simple "f7"
+                    |> extractError
+                    |> Expect.equal (Just (WrongInitialByte { got = 0xF7 }))
+        , test "rejects float16 (additional info 25)" <|
+            \_ ->
+                -- 0xf9 0x00 0x00 = float16 0.0
+                decodeFromHex CD.simple "f90000"
+                    |> extractError
+                    |> Expect.equal (Just (WrongInitialByte { got = 0xF9 }))
+        , test "rejects non-major-type-7" <|
+            \_ ->
+                -- 0x00 = integer 0
+                decodeFromHex CD.simple "00"
+                    |> extractError
+                    |> Expect.equal (Just (WrongMajorType { expected = 7, got = 0 }))
         ]

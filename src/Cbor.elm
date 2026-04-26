@@ -1,5 +1,5 @@
 module Cbor exposing
-    ( CborItem(..), IntWidth(..), FloatWidth(..), SimpleWidth(..), Length(..), Sign(..), Tag(..), tagToInt
+    ( CborItem(..), IntWidth(..), FloatWidth(..), SimpleWidth(..), Length(..), Sign(..), Tag(..), tagToInt, intToTag
     , DecodeError(..)
     , diagnose
     )
@@ -9,7 +9,7 @@ module Cbor exposing
 This module defines `CborItem`, a lossless representation of any well-formed
 CBOR encoding per [RFC 8949](https://datatracker.ietf.org/doc/html/rfc8949).
 
-@docs CborItem, IntWidth, FloatWidth, SimpleWidth, Length, Sign, Tag, tagToInt
+@docs CborItem, IntWidth, FloatWidth, SimpleWidth, Length, Sign, Tag, tagToInt, intToTag
 @docs DecodeError
 @docs diagnose
 
@@ -365,6 +365,66 @@ tagToInt tag =
 
         Unknown n ->
             n
+
+
+{-| Convert an integer to its `Tag` representation.
+
+Returns the named variant for well-known tag numbers, `Unknown n` otherwise.
+
+-}
+intToTag : Int -> Tag
+intToTag n =
+    case n of
+        0 ->
+            StandardDateTime
+
+        1 ->
+            EpochDateTime
+
+        2 ->
+            PositiveBigNum
+
+        3 ->
+            NegativeBigNum
+
+        4 ->
+            DecimalFraction
+
+        5 ->
+            BigFloat
+
+        21 ->
+            Base64UrlConversion
+
+        22 ->
+            Base64Conversion
+
+        23 ->
+            Base16Conversion
+
+        24 ->
+            Cbor
+
+        32 ->
+            Uri
+
+        33 ->
+            Base64Url
+
+        34 ->
+            Base64
+
+        35 ->
+            Regex
+
+        36 ->
+            Mime
+
+        55799 ->
+            IsCbor
+
+        _ ->
+            Unknown n
 
 
 escapeString : String -> String

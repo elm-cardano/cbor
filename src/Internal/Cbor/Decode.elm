@@ -1,6 +1,6 @@
 module Internal.Cbor.Decode exposing
     ( Decoder
-    , int, bigInt, float, bool, null, maybe, string, bytes
+    , int, bigInt, float, bool, null, undefined, maybe, simple, string, bytes
     , item, skip, skipFull, skipNFull, skipIndefinite, skipEntries
     , mapHeader, arrayHeader
     , array, associativeList, entryLoop, tagHeader, tagged
@@ -53,7 +53,7 @@ to produce the opaque `CborDecoder` type exposed to package users.
 
 ## Primitives
 
-@docs int, bigInt, float, bool, null, maybe, string, bytes
+@docs int, bigInt, float, bool, null, undefined, maybe, simple, string, bytes
 
 
 ## Item and Skip
@@ -104,7 +104,7 @@ import Bitwise
 import Bytes exposing (Bytes)
 import Bytes.Decoder as BD
 import Bytes.Encode
-import Cbor exposing (CborItem(..), DecodeError(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag(..))
+import Cbor exposing (CborItem(..), DecodeError(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), SimpleWidth(..), Tag)
 
 
 
@@ -371,63 +371,6 @@ nibbleToHexChar n =
         Char.fromCode (n - 10 + 0x61)
 
 
-{-| Convert a CBOR tag number to its `Tag` representation.
--}
-intToTag : Int -> Tag
-intToTag n =
-    case n of
-        0 ->
-            StandardDateTime
-
-        1 ->
-            EpochDateTime
-
-        2 ->
-            PositiveBigNum
-
-        3 ->
-            NegativeBigNum
-
-        4 ->
-            DecimalFraction
-
-        5 ->
-            BigFloat
-
-        21 ->
-            Base64UrlConversion
-
-        22 ->
-            Base64Conversion
-
-        23 ->
-            Base16Conversion
-
-        24 ->
-            Cbor
-
-        32 ->
-            Uri
-
-        33 ->
-            Base64Url
-
-        34 ->
-            Base64
-
-        35 ->
-            Regex
-
-        36 ->
-            Mime
-
-        55799 ->
-            IsCbor
-
-        _ ->
-            Unknown n
-
-
 
 -- PRIMITIVES
 
@@ -571,6 +514,18 @@ null default initialByte =
             BD.fail (WrongInitialByte { got = initialByte })
 
 
+{-| Decode a CBOR undefined (initial byte 0xF7), returning the given default.
+-}
+undefined : a -> Decoder ctx a
+undefined default initialByte =
+    case initialByte of
+        0xF7 ->
+            BD.succeed default
+
+        _ ->
+            BD.fail (WrongInitialByte { got = initialByte })
+
+
 {-| Decode a nullable value: null (0xF6) or undefined (0xF7) become
 `Nothing`, anything else is decoded with the inner decoder and wrapped
 in `Just`.
@@ -586,6 +541,44 @@ maybe inner initialByte =
 
         _ ->
             inner initialByte |> BD.map Just
+
+
+{-| Decode a CBOR simple value (major type 7).
+
+Rejects additional info 20–23 (bool, null, undefined) and 25–27 (floats)
+which have their own decoders. Those all fall through to the `else` branch.
+
+Like `withArgument` for integers, we don't reject non-canonical encodings
+(e.g. a value < 32 encoded with the one-byte form).
+
+-}
+simple : Decoder ctx Int
+simple initialByte =
+    let
+        majorType : Int
+        majorType =
+            Bitwise.shiftRightZfBy 5 initialByte
+    in
+    if majorType /= 7 then
+        BD.fail (WrongMajorType { expected = 7, got = majorType })
+
+    else
+        let
+            additionalInfo : Int
+            additionalInfo =
+                Bitwise.and 0x1F initialByte
+        in
+        if additionalInfo <= 19 then
+            -- Simple value encoded inline (0–19)
+            BD.succeed additionalInfo
+
+        else if additionalInfo == 24 then
+            -- Simple value in the next byte (32–255)
+            u8
+
+        else
+            -- 20=false, 21=true, 22=null, 23=undefined, 25/26/27=floats
+            BD.fail (WrongInitialByte { got = initialByte })
 
 
 {-| Decode a CBOR text string (major type 3).
@@ -928,7 +921,7 @@ tagHeader initialByte =
 
     else
         withArgument (Bitwise.and 0x1F initialByte)
-            (\tagNum -> BD.succeed (intToTag tagNum))
+            (\tagNum -> BD.succeed (Cbor.intToTag tagNum))
 
 
 {-| Decode a tagged CBOR value (major type 6).
@@ -1166,7 +1159,7 @@ item initialByte =
             withArgument additionalInfo
                 (\tagNum ->
                     itemBD
-                        |> BD.map (\enclosed -> CborTag (intToTag tagNum) enclosed)
+                        |> BD.map (\enclosed -> CborTag (Cbor.intToTag tagNum) enclosed)
                 )
 
         7 ->

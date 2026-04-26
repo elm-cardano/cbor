@@ -3,7 +3,7 @@ module Cbor.Decode exposing
     , errorToString
     , succeed, fail
     , map, map2, map3, map4, map5, andThen, oneOf, keep, ignore, lazy
-    , int, bigInt, float, bool, null, maybe, string, bytes
+    , int, bigInt, float, bool, null, undefined, maybe, simple, string, bytes
     , array, associativeList, dict, field, foldEntries, tag, tagged
     , RecordBuilder, record, element, optionalElement, ExtraElements(..), buildRecord
     , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
@@ -57,7 +57,7 @@ future release.
 
 ## Primitives
 
-@docs int, bigInt, float, bool, null, maybe, string, bytes
+@docs int, bigInt, float, bool, null, undefined, maybe, simple, string, bytes
 
 
 ## Collections
@@ -412,6 +412,13 @@ null default =
     Item (Inner.null default)
 
 
+{-| Decode a CBOR undefined (0xF7), returning the provided default value.
+-}
+undefined : a -> CborDecoder ctx a
+undefined default =
+    Item (Inner.undefined default)
+
+
 {-| Decode a nullable value: CBOR null (0xF6) or undefined (0xF7) become
 `Nothing`, anything else is decoded with the inner decoder and wrapped
 in `Just`.
@@ -419,6 +426,17 @@ in `Just`.
 maybe : CborDecoder ctx a -> CborDecoder ctx (Maybe a)
 maybe decoder =
     Item (Inner.maybe (unwrap decoder))
+
+
+{-| Decode a CBOR simple value (major type 7).
+
+Returns the simple value number. Rejects booleans (20–21), null (22),
+undefined (23), and floats (25–27) which have their own decoders.
+
+-}
+simple : CborDecoder ctx Int
+simple =
+    Item Inner.simple
 
 
 {-| Decode a CBOR text string (major type 3).
