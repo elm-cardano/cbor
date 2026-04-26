@@ -165,7 +165,7 @@ type DecodeError
     | TooFewElements (Maybe { expected : Int, got : Int })
     | TooManyElements (Maybe { expected : Int, got : Int })
     | FailedToFinalizeRecord
-    | ForbiddenPureInCollection
+    | NonConsumingDecoder String
     | UnknownMajorType Int
 
 

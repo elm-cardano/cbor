@@ -229,8 +229,8 @@ decodeErrorToString err =
         FailedToFinalizeRecord ->
             "Failed to finalize record: not all required fields were decoded"
 
-        ForbiddenPureInCollection ->
-            "A non-consuming decoder (succeed/fail) cannot be used as a direct element of a collection"
+        NonConsumingDecoder position ->
+            "A non-consuming decoder (succeed/fail) cannot be used as " ++ position
 
         UnknownMajorType mt ->
             "Unknown major type: " ++ String.fromInt mt
@@ -527,14 +527,14 @@ bytes =
 
 Handles both definite and indefinite-length arrays. The element decoder
 must be an `Item` (i.e. consume bytes); using `succeed` or `fail` directly
-as an element decoder will produce a `ForbiddenPureInCollection` error.
+as an element decoder will produce a `NonConsumingDecoder` error.
 
 -}
 array : CborDecoder ctx a -> CborDecoder ctx (List a)
 array elementDecoder =
     case elementDecoder of
         Pure _ ->
-            Item (\_ -> BD.fail ForbiddenPureInCollection)
+            Item (\_ -> BD.fail (NonConsumingDecoder "array element"))
 
         Item elementBody ->
             let
@@ -554,7 +554,7 @@ associativeList : CborDecoder ctx k -> CborDecoder ctx v -> CborDecoder ctx (Lis
 associativeList keyDecoder valueDecoder =
     case keyDecoder of
         Pure _ ->
-            Item (\_ -> BD.fail ForbiddenPureInCollection)
+            Item (\_ -> BD.fail (NonConsumingDecoder "map key"))
 
         Item keyBody ->
             let
@@ -626,7 +626,7 @@ foldEntries :
 foldEntries keyDecoder handler initialAcc =
     case keyDecoder of
         Pure _ ->
-            Item (\_ -> BD.fail ForbiddenPureInCollection)
+            Item (\_ -> BD.fail (NonConsumingDecoder "map key"))
 
         Item keyBody ->
             let
@@ -1199,7 +1199,7 @@ onKey key valueDecoder setter (UnorderedRecordBuilder keyDecoder init handlers) 
                     u8 |> BD.andThen body |> BD.map setter
 
                 Pure _ ->
-                    BD.fail ForbiddenPureInCollection
+                    BD.fail (NonConsumingDecoder "map value")
     in
     UnorderedRecordBuilder keyDecoder
         init
@@ -1254,7 +1254,7 @@ unwrap decoder =
             inner
 
         _ ->
-            \_ -> BD.fail ForbiddenPureInCollection
+            \_ -> BD.fail (NonConsumingDecoder "collection element")
 
 
 type alias MapConfig ctx comparable acc a =
