@@ -4,6 +4,7 @@ module Internal.Cbor.Decode exposing
     , item, skip, skipFull, skipNFull, skipIndefinite, skipEntries
     , mapHeader, arrayHeader
     , array, associativeList, entryLoop, tagHeader, tagged
+    , untilBreak
     , KeyedState, expectBreak, readKeyFrom
     , readCountedElement
     , u8
@@ -68,6 +69,11 @@ to produce the opaque `CborDecoder` type exposed to package users.
 ## Collections
 
 @docs array, associativeList, entryLoop, tagHeader, tagged
+
+
+## Indefinite-Length Helpers
+
+@docs untilBreak
 
 
 ## Keyed Record Helpers
@@ -953,6 +959,31 @@ tagged expectedTag innerBD initialByte =
                 else
                     BD.fail (WrongTag { expected = Cbor.tagToInt expectedTag, got = tagNum })
             )
+
+
+{-| Decode items until a break byte (0xFF) is encountered.
+
+Takes the pre-read initial byte like all `Decoder` functions.
+The break check happens at the top of each iteration, so the
+empty case (immediate 0xFF) is handled uniformly.
+
+-}
+untilBreak : Decoder ctx a -> Decoder ctx (List a)
+untilBreak elementBody initialByte =
+    BD.loop
+        (\{ byte, acc } ->
+            if byte == 0xFF then
+                BD.succeed (BD.Done (List.reverse acc))
+
+            else
+                elementBody byte
+                    |> BD.andThen
+                        (\v ->
+                            u8
+                                |> BD.map (\nextByte -> BD.Loop { byte = nextByte, acc = v :: acc })
+                        )
+        )
+        { byte = initialByte, acc = [] }
 
 
 

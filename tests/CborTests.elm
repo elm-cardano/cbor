@@ -111,6 +111,7 @@ suite =
         , dictTests
         , mapNTests
         , rawTests
+        , indefiniteHelperTests
         ]
 
 
@@ -2778,4 +2779,154 @@ rawTests =
                 decodeFromHex (CD.map2 Tuple.pair CD.rawBytes CD.rawBytes) hex
                     |> Result.map (\( a, b ) -> ( Hex.fromBytes a, Hex.fromBytes b ))
                     |> Expect.equal (Ok ( "01", "626869" ))
+        ]
+
+
+indefiniteHelperTests : Test
+indefiniteHelperTests =
+    describe "break / untilBreak"
+        [ test "break consumes break byte" <|
+            \_ ->
+                -- indefinite array [1, 2] then break, followed by an int
+                -- 9F 01 02 FF 03
+                decodeFromHex
+                    (CD.arrayHeader
+                        |> CD.andThen
+                            (\_ ->
+                                CD.map2 Tuple.pair CD.int CD.int
+                                    |> CD.andThen (\pair -> CD.map (\() -> pair) CD.break)
+                            )
+                    )
+                    "9f0102ff"
+                    |> Expect.equal (Ok ( 1, 2 ))
+        , test "break fails on non-break" <|
+            \_ ->
+                decodeFromHex CD.break "01"
+                    |> extractError
+                    |> Expect.equal (Just (TooManyElements Nothing))
+        , test "untilBreak decodes indefinite array" <|
+            \_ ->
+                -- 9F 01 02 03 FF = indefinite array [1, 2, 3]
+                decodeFromHex
+                    (CD.arrayHeader
+                        |> CD.andThen (\_ -> CD.untilBreak CD.int)
+                    )
+                    "9f010203ff"
+                    |> Expect.equal (Ok [ 1, 2, 3 ])
+        , test "untilBreak empty" <|
+            \_ ->
+                -- 9F FF = indefinite array []
+                decodeFromHex
+                    (CD.arrayHeader
+                        |> CD.andThen (\_ -> CD.untilBreak CD.int)
+                    )
+                    "9fff"
+                    |> Expect.equal (Ok [])
+        , test "untilBreak with map entries" <|
+            \_ ->
+                -- BF 01 61 61 02 61 62 FF = indefinite map {1: "a", 2: "b"}
+                decodeFromHex
+                    (CD.mapHeader
+                        |> CD.andThen
+                            (\_ -> CD.untilBreak (CD.map2 Tuple.pair CD.int CD.string))
+                    )
+                    "bf016161026162ff"
+                    |> Expect.equal (Ok [ ( 1, "a" ), ( 2, "b" ) ])
+        , test "branch on array header" <|
+            \_ ->
+                -- Definite 2-element array: 82 01 02
+                decodeFromHex
+                    (CD.arrayHeader
+                        |> CD.andThen
+                            (\maybeCount ->
+                                case maybeCount of
+                                    Just 2 ->
+                                        CD.map2 Tuple.pair CD.int CD.int
+                                            |> CD.map (\( a, b ) -> [ a, b ])
+
+                                    Nothing ->
+                                        CD.untilBreak CD.int
+
+                                    _ ->
+                                        CD.fail (WrongInitialByte { got = 0 })
+                            )
+                    )
+                    "820102"
+                    |> Expect.equal (Ok [ 1, 2 ])
+        , test "break then more data" <|
+            \_ ->
+                -- 9F 01 02 FF 63 666f6f
+                -- indefinite array with 2 known elements, break, then string "foo"
+                decodeFromHex
+                    (CD.arrayHeader
+                        |> CD.andThen
+                            (\_ ->
+                                CD.map3 (\a b s -> ( a, b, s ))
+                                    CD.int
+                                    CD.int
+                                    (CD.break |> CD.andThen (\() -> CD.string))
+                            )
+                    )
+                    "9f0102ff63666f6f"
+                    |> Expect.equal (Ok ( 1, 2, "foo" ))
+        , test "untilBreak with elements then more data" <|
+            \_ ->
+                -- 9F 01 02 03 FF 2A
+                -- indefinite array [1,2,3], break, then int 42
+                decodeFromHex
+                    (CD.arrayHeader
+                        |> CD.andThen
+                            (\_ ->
+                                CD.map2 Tuple.pair
+                                    (CD.untilBreak CD.int)
+                                    CD.int
+                            )
+                    )
+                    "9f010203ff182a"
+                    |> Expect.equal (Ok ( [ 1, 2, 3 ], 42 ))
+        , test "untilBreak empty then more data" <|
+            \_ ->
+                -- 9F FF 182A
+                -- indefinite array [], break, then int 42
+                decodeFromHex
+                    (CD.arrayHeader
+                        |> CD.andThen
+                            (\_ ->
+                                CD.map2 Tuple.pair
+                                    (CD.untilBreak CD.int)
+                                    CD.int
+                            )
+                    )
+                    "9fff182a"
+                    |> Expect.equal (Ok ( [], 42 ))
+        , test "untilBreak map entries then more data" <|
+            \_ ->
+                -- BF 01 61 61 FF 182A
+                -- indefinite map {1: "a"}, break, then int 42
+                decodeFromHex
+                    (CD.mapHeader
+                        |> CD.andThen
+                            (\_ ->
+                                CD.map2 Tuple.pair
+                                    (CD.untilBreak (CD.map2 Tuple.pair CD.int CD.string))
+                                    CD.int
+                            )
+                    )
+                    "bf016161ff182a"
+                    |> Expect.equal (Ok ( [ ( 1, "a" ) ], 42 ))
+        , test "untilBreak empty map then more data" <|
+            \_ ->
+                -- BF FF 182A
+                -- indefinite map {}, break, then int 42
+                decodeFromHex
+                    (CD.mapHeader
+                        |> CD.andThen
+                            (\_ ->
+                                CD.map2 Tuple.pair
+                                    (CD.untilBreak (CD.map2 Tuple.pair CD.int CD.string))
+                                    CD.int
+                            )
+                    )
+                    "bfff182a"
+                    |> Expect.equal (Ok ( [], 42 ))
         ]

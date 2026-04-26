@@ -8,7 +8,7 @@ module Cbor.Decode exposing
     , RecordBuilder, record, element, optionalElement, ExtraElements(..), buildRecord
     , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
     , UnorderedRecordBuilder, unorderedRecord, onKey, buildUnorderedRecord
-    , arrayHeader, mapHeader
+    , arrayHeader, mapHeader, break, untilBreak
     , item, itemSkip, rawBytes
     )
 
@@ -75,7 +75,7 @@ Run them with `decode`.
 
 ## Structure Headers
 
-@docs arrayHeader, mapHeader
+@docs arrayHeader, mapHeader, break, untilBreak
 
 
 ## Escape Hatch
@@ -600,6 +600,28 @@ indefinite-length.
 mapHeader : CborDecoder ctx (Maybe Int)
 mapHeader =
     Item Inner.mapHeader
+
+
+{-| Consume a break byte (0xFF).
+
+Use this after decoding a known number of elements from an
+indefinite-length container.
+
+-}
+break : CborDecoder ctx ()
+break =
+    Item Inner.expectBreak
+
+
+{-| Decode items until a break byte (0xFF) is encountered.
+
+Use this after reading an indefinite-length header with `arrayHeader` or
+`mapHeader`. The element decoder must be `Item` (i.e. consume bytes).
+
+-}
+untilBreak : CborDecoder ctx a -> CborDecoder ctx (List a)
+untilBreak elementDecoder =
+    Item (Inner.untilBreak (unwrap elementDecoder))
 
 
 
