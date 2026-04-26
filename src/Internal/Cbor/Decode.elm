@@ -3,7 +3,7 @@ module Internal.Cbor.Decode exposing
     , int, bigInt, float, bool, null, maybe, string, bytes
     , item, skip, skipFull, skipNFull, skipIndefinite, skipEntries
     , mapHeader, arrayHeader
-    , array, associativeList, entryLoop, tag
+    , array, associativeList, entryLoop, tagHeader, tagged
     , KeyedState, expectBreak, readKeyFrom
     , readCountedElement
     , u8
@@ -67,7 +67,7 @@ to produce the opaque `CborDecoder` type exposed to package users.
 
 ## Collections
 
-@docs array, associativeList, entryLoop, tag
+@docs array, associativeList, entryLoop, tagHeader, tagged
 
 
 ## Keyed Record Helpers
@@ -905,14 +905,37 @@ entryLoop keyBD keyBody handler initialAcc initialByte =
                 )
 
 
+{-| Decode a CBOR tag header (major type 6), returning the `Tag` value.
+
+Does not decode the enclosed item — the caller handles that separately.
+
+-}
+tagHeader : Decoder ctx Tag
+tagHeader initialByte =
+    let
+        majorType : Int
+        majorType =
+            Bitwise.shiftRightZfBy 5 initialByte
+    in
+    if majorType /= 6 then
+        BD.fail (WrongMajorType { expected = 6, got = majorType })
+
+    else
+        withArgument (Bitwise.and 0x1F initialByte)
+            (\tagNum -> BD.succeed (intToTag tagNum))
+
+
 {-| Decode a tagged CBOR value (major type 6).
 
 Expects a specific tag, then decodes the enclosed item.
 We use the pre-applied value decoders.
 
+This function does not re-use the tagHeader function
+due to the extra BD.andThen allocation penalty.
+
 -}
-tag : Tag -> BD.Decoder ctx DecodeError a -> Decoder ctx a
-tag expectedTag innerBD initialByte =
+tagged : Tag -> BD.Decoder ctx DecodeError a -> Decoder ctx a
+tagged expectedTag innerBD initialByte =
     let
         majorType : Int
         majorType =

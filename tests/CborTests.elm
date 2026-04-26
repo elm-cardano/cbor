@@ -636,25 +636,49 @@ encodeTagTests =
 
 decodeTagTests : Test
 decodeTagTests =
-    describe "Cbor.Decode.tag"
-        [ test "matching tag succeeds" <|
+    describe "Cbor.Decode.tag / tagged"
+        [ test "tag reads tag value" <|
             \_ ->
-                decodeFromHex (CD.tag EpochDateTime CD.int) "c11a514b67b0"
+                decodeFromHex (CD.map2 Tuple.pair CD.tag CD.int) "c11a514b67b0"
+                    |> Expect.equal (Ok ( EpochDateTime, 1363896240 ))
+        , test "tag with andThen" <|
+            \_ ->
+                decodeFromHex
+                    (CD.tag
+                        |> CD.andThen
+                            (\t ->
+                                if t == EpochDateTime then
+                                    CD.int
+
+                                else
+                                    CD.fail (WrongTag { expected = 1, got = 0 })
+                            )
+                    )
+                    "c11a514b67b0"
                     |> Expect.equal (Ok 1363896240)
-        , test "wrong tag fails" <|
+        , test "tag rejects non-tag" <|
             \_ ->
-                decodeFromHex (CD.tag EpochDateTime CD.int) "c001"
-                    |> Result.toMaybe
-                    |> Expect.equal Nothing
-        , test "Unknown tag number" <|
+                decodeFromHex CD.tag "01"
+                    |> extractError
+                    |> Expect.equal (Just (WrongMajorType { expected = 6, got = 0 }))
+        , test "tagged matching tag succeeds" <|
             \_ ->
-                decodeFromHex (CD.tag (Unknown 256) CD.int) "d9010001"
+                decodeFromHex (CD.tagged EpochDateTime CD.int) "c11a514b67b0"
+                    |> Expect.equal (Ok 1363896240)
+        , test "tagged wrong tag fails" <|
+            \_ ->
+                decodeFromHex (CD.tagged EpochDateTime CD.int) "c001"
+                    |> extractError
+                    |> Expect.equal (Just (WrongTag { expected = 1, got = 0 }))
+        , test "tagged Unknown tag number" <|
+            \_ ->
+                decodeFromHex (CD.tagged (Unknown 256) CD.int) "d9010001"
                     |> Expect.equal (Ok 1)
-        , test "rejects non-tag" <|
+        , test "tagged rejects non-tag" <|
             \_ ->
-                decodeFromHex (CD.tag EpochDateTime CD.int) "01"
-                    |> Result.toMaybe
-                    |> Expect.equal Nothing
+                decodeFromHex (CD.tagged EpochDateTime CD.int) "01"
+                    |> extractError
+                    |> Expect.equal (Just (WrongMajorType { expected = 6, got = 0 }))
         ]
 
 

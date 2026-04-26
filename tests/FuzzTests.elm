@@ -135,7 +135,7 @@ roundTripProperties =
         , fuzz Fuzz.int "tagged int" <|
             \n ->
                 CE.encode (CE.tag EpochDateTime (CE.int n))
-                    |> CD.decode (CD.tag EpochDateTime CD.int)
+                    |> CD.decode (CD.tagged EpochDateTime CD.int)
                     |> Expect.equal (Ok n)
         ]
 

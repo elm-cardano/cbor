@@ -4,7 +4,7 @@ module Cbor.Decode exposing
     , succeed, fail
     , map, map2, map3, map4, map5, andThen, oneOf, keep, ignore, lazy
     , int, bigInt, float, bool, null, maybe, string, bytes
-    , array, associativeList, dict, field, foldEntries, tag
+    , array, associativeList, dict, field, foldEntries, tag, tagged
     , RecordBuilder, record, element, optionalElement, ExtraElements(..), buildRecord
     , KeyedRecordBuilder, keyedRecord, required, optional, buildKeyedRecord
     , UnorderedRecordBuilder, unorderedRecord, onKey, buildUnorderedRecord
@@ -55,7 +55,7 @@ Run them with `decode`.
 
 ## Collections
 
-@docs array, associativeList, dict, field, foldEntries, tag
+@docs array, associativeList, dict, field, foldEntries, tag, tagged
 
 
 ## Record Builder (CBOR arrays → Elm values)
@@ -556,19 +556,30 @@ foldEntries keyDecoder handler initialAcc =
             Item (Inner.entryLoop keyBD keyBody innerHandler initialAcc)
 
 
+{-| Decode a CBOR tag (major type 6), returning the `Tag` value.
+
+Does not decode the enclosed item. Useful with `andThen` to branch on
+the tag number and then decode the body accordingly.
+
+-}
+tag : CborDecoder ctx Tag
+tag =
+    Item Inner.tagHeader
+
+
 {-| Decode a tagged CBOR value (major type 6).
 
 Expects a specific tag, then decodes the enclosed item.
 
 -}
-tag : Tag -> CborDecoder ctx a -> CborDecoder ctx a
-tag expectedTag innerDecoder =
+tagged : Tag -> CborDecoder ctx a -> CborDecoder ctx a
+tagged expectedTag innerDecoder =
     let
         innerBD : BD.Decoder ctx DecodeError a
         innerBD =
             toBD innerDecoder
     in
-    Item (Inner.tag expectedTag innerBD)
+    Item (Inner.tagged expectedTag innerBD)
 
 
 
