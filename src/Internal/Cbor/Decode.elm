@@ -53,7 +53,7 @@ to produce the opaque `CborDecoder` type exposed to package users.
 
 ## Primitives
 
-@docs int, bigInt, float, bool, null, string, bytes
+@docs int, bigInt, float, bool, null, maybe, string, bytes
 
 
 ## Item and Skip
