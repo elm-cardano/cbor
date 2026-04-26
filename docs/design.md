@@ -222,7 +222,8 @@ A CBOR decode failure produces `Custom { at = byteOffset } (WrongMajorType { exp
 
 ```elm
 -- Primitives (always use shortest encoding form regardless of strategy)
-Cbor.Encode.int : Int -> Encoder
+Cbor.Encode.int : Int -> Encoder                -- safe for [-(2^53-1), 2^53-1]
+Cbor.Encode.bigInt : Sign -> Bytes -> Encoder    -- major type 0/1 if ≤8 bytes, tag 2/3 otherwise
 Cbor.Encode.float : Float -> Encoder
 Cbor.Encode.bool : Bool -> Encoder
 Cbor.Encode.null : Encoder

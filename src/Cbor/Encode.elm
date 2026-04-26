@@ -1,6 +1,6 @@
 module Cbor.Encode exposing
     ( Encoder, encode
-    , int, float, bool, null, undefined, maybe, string, bytes, simple
+    , int, bigInt, float, bool, null, undefined, maybe, string, bytes, simple
     , intWithWidth, floatWithWidth
     , stringChunked, bytesChunked
     , Sort(..), list, array, map, associativeList, dict, tagged, keyedRecord, sequence
@@ -34,7 +34,7 @@ no separate strategy parameter is needed.
 
 ## Primitives
 
-@docs int, float, bool, null, undefined, maybe, string, bytes, simple
+@docs int, bigInt, float, bool, null, undefined, maybe, string, bytes, simple
 
 
 ## Explicit Width Control
@@ -64,7 +64,7 @@ no separate strategy parameter is needed.
 -}
 
 import Bitwise
-import Bytes
+import Bytes exposing (Bytes)
 import Bytes.Decode
 import Bytes.Encode as BE
 import Bytes.Floating.Decode
@@ -134,12 +134,109 @@ encode (Encoder be) =
 
 {-| Encode an integer using the shortest form.
 
-Handles both positive and negative values within Elm's safe integer range.
+Only reliable for values in `[-(2^53 - 1), 2^53 - 1]` (JavaScript's safe
+integer range). Outside that range, Elm's `Int` loses precision and the
+encoded bytes will be wrong. For arbitrarily large integers, use `bigInt`
+with a raw bytes representation.
 
 -}
 int : Int -> Encoder
 int n =
     Encoder (encodeInt n)
+
+
+{-| Encode an arbitrarily large integer from its `Sign` and big-endian
+unsigned magnitude bytes.
+
+  - If the magnitude fits in 8 bytes, encodes as a standard CBOR integer
+    (major type 0 or 1) using the shortest form.
+  - If the magnitude exceeds 8 bytes, encodes as a bignum
+    (tag 2 for `Positive`, tag 3 for `Negative`) wrapping the byte string.
+
+The bytes are the **unsigned magnitude** in big-endian byte order.
+For `Negative`, the actual mathematical value is `−1 − magnitude`,
+matching the CBOR spec for both major type 1 and tag 3.
+
+Leading zero bytes are stripped before encoding.
+
+TODO: try to optimize because hot in elm-cardano
+
+-}
+bigInt : Sign -> Bytes -> Encoder
+bigInt sign magnitude =
+    let
+        stripped : Bytes
+        stripped =
+            stripLeadingZeros magnitude
+
+        width : Int
+        width =
+            Bytes.width stripped
+
+        majorType : Int
+        majorType =
+            case sign of
+                Positive ->
+                    0
+
+                Negative ->
+                    1
+    in
+    if width <= 4 then
+        -- Fits in 32 bits — safe to convert to Elm Int and use encodeHeader.
+        -- Remark: A bit of time wasted for sizes 2, 4, because in theory no need to decode/reencode.
+        -- Needed for 1 (in case fit in header) and 3 to adjust to 4.
+        let
+            arg : Int
+            arg =
+                Bytes.Decode.decode (unsignedDecoder width) stripped
+                    |> Maybe.withDefault 0
+        in
+        Encoder (encodeHeader majorType arg)
+
+    else if width <= 8 then
+        -- Fits in 64-bit CBOR integer but may exceed Elm's safe Int range.
+        -- Decode as two U32 halves and emit directly.
+        let
+            -- Remark: we probably don’t need the tuple allocation here and could
+            -- do the encoding directly by mapping the encoders.
+            -- Optimization to check later.
+            ( hi, lo ) =
+                Bytes.Decode.decode
+                    (Bytes.Decode.map2 Tuple.pair
+                        (unsignedDecoder (width - 4))
+                        (Bytes.Decode.unsignedInt32 Bytes.BE)
+                    )
+                    stripped
+                    |> Maybe.withDefault ( 0, 0 )
+        in
+        Encoder
+            (BE.sequence
+                [ BE.unsignedInt8 (Bitwise.shiftLeftBy 5 majorType + 27)
+                , BE.unsignedInt32 Bytes.BE hi
+                , BE.unsignedInt32 Bytes.BE lo
+                ]
+            )
+
+    else
+        -- Exceeds 64 bits — encode as bignum (tag 2 or 3).
+        let
+            bigNumTag : Tag
+            bigNumTag =
+                case sign of
+                    Positive ->
+                        Cbor.PositiveBigNum
+
+                    Negative ->
+                        Cbor.NegativeBigNum
+        in
+        Encoder
+            (BE.sequence
+                [ encodeHeader 6 (tagToInt bigNumTag)
+                , encodeHeader 2 width
+                , BE.bytes stripped
+                ]
+            )
 
 
 {-| Encode a float using the shortest IEEE 754 form that preserves the value.
@@ -756,6 +853,118 @@ encodeHeaderWithWidth width majorType argument =
                 , BE.unsignedInt32 Bytes.BE hi
                 , BE.unsignedInt32 Bytes.BE lo
                 ]
+
+
+{-| Strip leading zero bytes from a big-endian Bytes value.
+-}
+stripLeadingZeros : Bytes.Bytes -> Bytes.Bytes
+stripLeadingZeros bs =
+    let
+        width : Int
+        width =
+            Bytes.width bs
+    in
+    if width == 0 then
+        bs
+
+    else
+        case Bytes.Decode.decode (countLeadingZeros width) bs of
+            Just zeros ->
+                if zeros == width then
+                    -- All zeros (or empty) → represent as empty bytes (value 0).
+                    BE.encode (BE.sequence [])
+
+                else if zeros == 0 then
+                    bs
+
+                else
+                    -- Drop the leading zeros by decoding only the tail.
+                    case Bytes.Decode.decode (Bytes.Decode.map2 (\_ tail -> tail) (Bytes.Decode.bytes zeros) (Bytes.Decode.bytes (width - zeros))) bs of
+                        Just tail ->
+                            tail
+
+                        Nothing ->
+                            bs
+
+            Nothing ->
+                bs
+
+
+countLeadingZeros : Int -> Bytes.Decode.Decoder Int
+countLeadingZeros width =
+    countLeadingZerosU32 width 0
+
+
+countLeadingZerosU32 : Int -> Int -> Bytes.Decode.Decoder Int
+countLeadingZerosU32 remaining acc =
+    if remaining >= 4 then
+        Bytes.Decode.unsignedInt32 Bytes.BE
+            |> Bytes.Decode.andThen
+                (\word ->
+                    if word == 0 then
+                        countLeadingZerosU32 (remaining - 4) (acc + 4)
+
+                    else
+                        Bytes.Decode.succeed (acc + countLeadingZerosInU32 word)
+                )
+
+    else
+        countLeadingZerosU8 remaining acc
+
+
+countLeadingZerosU8 : Int -> Int -> Bytes.Decode.Decoder Int
+countLeadingZerosU8 remaining acc =
+    if remaining <= 0 then
+        Bytes.Decode.succeed acc
+
+    else
+        Bytes.Decode.unsignedInt8
+            |> Bytes.Decode.andThen
+                (\byte ->
+                    if byte == 0 then
+                        countLeadingZerosU8 (remaining - 1) (acc + 1)
+
+                    else
+                        Bytes.Decode.succeed acc
+                )
+
+
+countLeadingZerosInU32 : Int -> Int
+countLeadingZerosInU32 word =
+    if word >= 0x01000000 then
+        0
+
+    else if word >= 0x00010000 then
+        1
+
+    else if word >= 0x0100 then
+        2
+
+    else
+        3
+
+
+{-| Decode 0–4 big-endian bytes as an unsigned Int.
+-}
+unsignedDecoder : Int -> Bytes.Decode.Decoder Int
+unsignedDecoder width =
+    case width of
+        0 ->
+            Bytes.Decode.succeed 0
+
+        1 ->
+            Bytes.Decode.unsignedInt8
+
+        2 ->
+            Bytes.Decode.unsignedInt16 Bytes.BE
+
+        3 ->
+            Bytes.Decode.map2 (\hi lo -> hi * 256 + lo)
+                (Bytes.Decode.unsignedInt16 Bytes.BE)
+                Bytes.Decode.unsignedInt8
+
+        _ ->
+            Bytes.Decode.unsignedInt32 Bytes.BE
 
 
 encodeFloat : Float -> BE.Encoder
