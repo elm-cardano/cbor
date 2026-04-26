@@ -1,6 +1,6 @@
 module Internal.Cbor.Decode exposing
     ( Decoder
-    , int, bigInt, float, bool, null, maybe, string, bytes
+    , int, bigInt, float, bool, null, string, bytes
     , item, skip, skipFull, skipNFull, skipIndefinite, skipEntries
     , mapHeader, arrayHeader
     , array, associativeList, entryLoop, tag
@@ -8,6 +8,7 @@ module Internal.Cbor.Decode exposing
     , readCountedElement
     , u8
     , intToHex
+    , maybe
     )
 
 {-| Low-level CBOR decoding primitives.

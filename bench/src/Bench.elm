@@ -3,6 +3,9 @@ module Bench exposing
     , enc_map_unsorted_100, enc_map_deterministic_100, enc_map_canonical_100
     , enc_map_unsorted_1000, enc_map_deterministic_1000, enc_map_canonical_1000
     , enc_map_unsorted_str100, enc_map_deterministic_str100, enc_map_canonical_str100
+    , enc_map_10, enc_dict_10
+    , enc_map_100, enc_dict_100
+    , enc_map_1000, enc_dict_1000
     , dec_direct_array100, dec_item_array100
     , enc_direct_list100, enc_item_list100
     , enc_float_f16_1000, enc_float_f32_1000, enc_float_f64_1000, enc_float_explicit64_1000
@@ -52,6 +55,22 @@ elm-bench -f Bench.enc_map_unsorted_str100 -f Bench.enc_map_deterministic_str100
 ```
 
 @docs enc_map_unsorted_str100, enc_map_deterministic_str100, enc_map_canonical_str100
+
+
+# Encode.map vs Encode.dict
+
+`map` starts from `List (Int, Int)`, builds `(Encoder, Encoder)` pairs via `List.map`, then encodes.
+`dict` starts from `Dict Int Int`, internally does `Dict.toList` + `List.map`, then encodes.
+
+```sh
+elm-bench -f Bench.enc_map_10 -f Bench.enc_dict_10 "()"
+elm-bench -f Bench.enc_map_100 -f Bench.enc_dict_100 "()"
+elm-bench -f Bench.enc_map_1000 -f Bench.enc_dict_1000 "()"
+```
+
+@docs enc_map_10, enc_dict_10
+@docs enc_map_100, enc_dict_100
+@docs enc_map_1000, enc_dict_1000
 
 
 # Direct combinators vs item escape hatch
@@ -166,6 +185,7 @@ import Bytes.Encode as BE
 import Cbor exposing (CborItem(..), FloatWidth(..), IntWidth(..), Length(..), Sign(..), Tag(..))
 import Cbor.Decode as CD
 import Cbor.Encode as CE
+import Dict exposing (Dict)
 
 
 
@@ -194,6 +214,46 @@ mapIntEntries100 =
 mapIntEntries1000 : List ( CE.Encoder, CE.Encoder )
 mapIntEntries1000 =
     mapIntEntries 1000
+
+
+pairsInt : Int -> List ( Int, Int )
+pairsInt n =
+    List.map (\i -> ( i, i * 7 + 3 )) (List.range 0 (n - 1))
+
+
+pairsInt10 : List ( Int, Int )
+pairsInt10 =
+    pairsInt 10
+
+
+pairsInt100 : List ( Int, Int )
+pairsInt100 =
+    pairsInt 100
+
+
+pairsInt1000 : List ( Int, Int )
+pairsInt1000 =
+    pairsInt 1000
+
+
+dictInt : Int -> Dict Int Int
+dictInt n =
+    Dict.fromList (pairsInt n)
+
+
+dictInt10 : Dict Int Int
+dictInt10 =
+    dictInt 10
+
+
+dictInt100 : Dict Int Int
+dictInt100 =
+    dictInt 100
+
+
+dictInt1000 : Dict Int Int
+dictInt1000 =
+    dictInt 1000
 
 
 mapStrEntries100 : List ( CE.Encoder, CE.Encoder )
@@ -706,6 +766,45 @@ enc_map_deterministic_str100 () =
 enc_map_canonical_str100 : () -> Bytes
 enc_map_canonical_str100 () =
     CE.encode (CE.map CE.canonicalSort Definite mapStrEntries100)
+
+
+
+-- ============================================================================
+-- 1b. ENCODE.MAP VS ENCODE.DICT
+-- ============================================================================
+-- Both start from pre-built raw data (no encoder allocation in setup).
+-- map: List (Int, Int) → List.map to build (Encoder, Encoder) pairs → CE.map
+-- dict: Dict Int Int → CE.dict (internally does Dict.toList + List.map)
+
+
+enc_map_10 : () -> Bytes
+enc_map_10 () =
+    CE.encode (CE.map CE.Unsorted Definite (List.map (\( k, v ) -> ( CE.int k, CE.int v )) pairsInt10))
+
+
+enc_dict_10 : () -> Bytes
+enc_dict_10 () =
+    CE.encode (CE.dict CE.Unsorted Definite CE.int CE.int dictInt10)
+
+
+enc_map_100 : () -> Bytes
+enc_map_100 () =
+    CE.encode (CE.map CE.Unsorted Definite (List.map (\( k, v ) -> ( CE.int k, CE.int v )) pairsInt100))
+
+
+enc_dict_100 : () -> Bytes
+enc_dict_100 () =
+    CE.encode (CE.dict CE.Unsorted Definite CE.int CE.int dictInt100)
+
+
+enc_map_1000 : () -> Bytes
+enc_map_1000 () =
+    CE.encode (CE.map CE.Unsorted Definite (List.map (\( k, v ) -> ( CE.int k, CE.int v )) pairsInt1000))
+
+
+enc_dict_1000 : () -> Bytes
+enc_dict_1000 () =
+    CE.encode (CE.dict CE.Unsorted Definite CE.int CE.int dictInt1000)
 
 
 
