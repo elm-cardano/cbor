@@ -22,6 +22,11 @@ module Bench exposing
     , dec_item_nested10, dec_item_map50str
     , dec_itemSkip_array100int, dec_itemSkip_array100str
     , dec_itemSkip_nested10, dec_itemSkip_map50str
+    , dec_array100_def, dec_array100_indef
+    , dec_map100_def, dec_map100_indef
+    , dec_fold30_def, dec_fold30_indef
+    , dec_item_array100_def, dec_item_array100_indef
+    , dec_item_map50_def, dec_item_map50_indef
     )
 
 {-| Benchmarks for elm-cardano/cbor performance characteristics.
@@ -176,6 +181,26 @@ elm-bench -f Bench.dec_item_map50str -f Bench.dec_itemSkip_map50str "()"
 @docs dec_item_nested10, dec_item_map50str
 @docs dec_itemSkip_array100int, dec_itemSkip_array100str
 @docs dec_itemSkip_nested10, dec_itemSkip_map50str
+
+
+# Definite vs indefinite-length decoding
+
+Compares the definite and indefinite code paths for the same data.
+The indefinite path uses a `BD.loop` with break-byte detection.
+
+```sh
+elm-bench -f Bench.dec_array100_def -f Bench.dec_array100_indef "()"
+elm-bench -f Bench.dec_map100_def -f Bench.dec_map100_indef "()"
+elm-bench -f Bench.dec_fold30_def -f Bench.dec_fold30_indef "()"
+elm-bench -f Bench.dec_item_array100_def -f Bench.dec_item_array100_indef "()"
+elm-bench -f Bench.dec_item_map50_def -f Bench.dec_item_map50_indef "()"
+```
+
+@docs dec_array100_def, dec_array100_indef
+@docs dec_map100_def, dec_map100_indef
+@docs dec_fold30_def, dec_fold30_indef
+@docs dec_item_array100_def, dec_item_array100_indef
+@docs dec_item_map50_def, dec_item_map50_indef
 
 -}
 
@@ -469,7 +494,7 @@ type PlutusNested
 decodePlutusFlat : CD.CborDecoder ctx PlutusFlat
 decodePlutusFlat =
     CD.oneOf
-        [ CD.tag (Unknown 121) (CD.array CD.int) |> CD.map PFConstr
+        [ CD.tagged (Unknown 121) (CD.array CD.int) |> CD.map PFConstr
         , CD.associativeList CD.int CD.int |> CD.map (\_ -> PFMap)
         , CD.array CD.int |> CD.map (\_ -> PFArray)
         , CD.int |> CD.map PFInt
@@ -488,7 +513,7 @@ decodePlutusNested =
             CD.lazy (\() -> decodePlutusNested)
     in
     CD.oneOf
-        [ CD.tag (Unknown 121) (CD.array self) |> CD.map PNConstr
+        [ CD.tagged (Unknown 121) (CD.array self) |> CD.map PNConstr
         , CD.associativeList self self |> CD.map PNMap
         , CD.array self |> CD.map PNArray
         , CD.int |> CD.map PNInt
@@ -1057,6 +1082,125 @@ dec_item_nested10 () =
 dec_item_map50str : () -> Maybe ()
 dec_item_map50str () =
     CD.decode CD.item map50strData |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+
+-- ============================================================================
+-- 7. DEFINITE VS INDEFINITE-LENGTH DECODING
+-- ============================================================================
+-- Same logical data encoded with Definite and Indefinite length.
+-- Measures the cost difference of the indefinite break-detection loop.
+
+
+array100DefData : Bytes
+array100DefData =
+    CE.encode (CE.list Definite CE.int (List.range 0 99))
+
+
+array100IndefData : Bytes
+array100IndefData =
+    CE.encode (CE.list Indefinite CE.int (List.range 0 99))
+
+
+map100DefData : Bytes
+map100DefData =
+    CE.encode (CE.associativeList CE.Unsorted Definite CE.int CE.int (pairsInt 100))
+
+
+map100IndefData : Bytes
+map100IndefData =
+    CE.encode (CE.associativeList CE.Unsorted Indefinite CE.int CE.int (pairsInt 100))
+
+
+fold30DefData : Bytes
+fold30DefData =
+    CE.encode
+        (CE.map CE.Unsorted Definite (List.map (\i -> ( CE.int i, CE.int (i * 3) )) (List.range 0 29)))
+
+
+fold30IndefData : Bytes
+fold30IndefData =
+    CE.encode
+        (CE.map CE.Unsorted Indefinite (List.map (\i -> ( CE.int i, CE.int (i * 3) )) (List.range 0 29)))
+
+
+map50strDefData : Bytes
+map50strDefData =
+    map50strData
+
+
+map50strIndefData : Bytes
+map50strIndefData =
+    CE.encode
+        (CE.map CE.Unsorted
+            Indefinite
+            (List.map
+                (\i ->
+                    ( CE.string ("key_" ++ String.padLeft 28 '0' (String.fromInt i))
+                    , CE.string ("val_" ++ String.padLeft 28 '0' (String.fromInt i))
+                    )
+                )
+                (List.range 0 49)
+            )
+        )
+
+
+dec_array100_def : () -> Maybe (List Int)
+dec_array100_def () =
+    CD.decode (CD.array CD.int) array100DefData |> Result.toMaybe
+
+
+dec_array100_indef : () -> Maybe (List Int)
+dec_array100_indef () =
+    CD.decode (CD.array CD.int) array100IndefData |> Result.toMaybe
+
+
+dec_map100_def : () -> Maybe (List ( Int, Int ))
+dec_map100_def () =
+    CD.decode (CD.associativeList CD.int CD.int) map100DefData |> Result.toMaybe
+
+
+dec_map100_indef : () -> Maybe (List ( Int, Int ))
+dec_map100_indef () =
+    CD.decode (CD.associativeList CD.int CD.int) map100IndefData |> Result.toMaybe
+
+
+decFold30 : CD.CborDecoder ctx (List ( Int, Int ))
+decFold30 =
+    CD.foldEntries CD.int
+        (\key acc -> CD.int |> CD.map (\v -> ( key, v ) :: acc))
+        []
+        |> CD.map List.reverse
+
+
+dec_fold30_def : () -> Maybe (List ( Int, Int ))
+dec_fold30_def () =
+    CD.decode decFold30 fold30DefData |> Result.toMaybe
+
+
+dec_fold30_indef : () -> Maybe (List ( Int, Int ))
+dec_fold30_indef () =
+    CD.decode decFold30 fold30IndefData |> Result.toMaybe
+
+
+dec_item_array100_def : () -> Maybe ()
+dec_item_array100_def () =
+    CD.decode CD.item array100DefData |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_item_array100_indef : () -> Maybe ()
+dec_item_array100_indef () =
+    CD.decode CD.item array100IndefData |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_item_map50_def : () -> Maybe ()
+dec_item_map50_def () =
+    CD.decode CD.item map50strDefData |> Result.toMaybe |> Maybe.map (\_ -> ())
+
+
+dec_item_map50_indef : () -> Maybe ()
+dec_item_map50_indef () =
+    CD.decode CD.item map50strIndefData |> Result.toMaybe |> Maybe.map (\_ -> ())
 
 
 dec_itemSkip_array100int : () -> Maybe ()

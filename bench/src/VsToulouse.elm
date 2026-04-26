@@ -11,6 +11,8 @@ module VsToulouse exposing
     , dec_ec_map100, dec_tl_map100
     , dec_ec_record10, dec_tl_record10
     , dec_ec_keyed10, dec_tl_keyed10
+    , dec_ec_array100_indef, dec_tl_array100_indef
+    , dec_ec_map100_indef, dec_tl_map100_indef
     )
 
 {-| Head-to-head benchmarks: elm-cardano/cbor (`ec`) vs elm-toulouse/cbor (`tl`).
@@ -143,6 +145,24 @@ elm-bench -f VsToulouse.dec_ec_keyed10 -f VsToulouse.dec_tl_keyed10 "()"
 ```
 
 @docs dec_ec_keyed10, dec_tl_keyed10
+
+
+# Decode indefinite-length array of 100 ints
+
+```sh
+elm-bench -f VsToulouse.dec_ec_array100_indef -f VsToulouse.dec_tl_array100_indef "()"
+```
+
+@docs dec_ec_array100_indef, dec_tl_array100_indef
+
+
+# Decode indefinite-length map of 100 int→int pairs
+
+```sh
+elm-bench -f VsToulouse.dec_ec_map100_indef -f VsToulouse.dec_tl_map100_indef "()"
+```
+
+@docs dec_ec_map100_indef, dec_tl_map100_indef
 
 -}
 
@@ -650,3 +670,45 @@ dec_ec_keyed10 () =
 dec_tl_keyed10 : () -> Maybe R10
 dec_tl_keyed10 () =
     TD.decode tlDecKR10 keyedRecord10Data
+
+
+
+-- ============================================================================
+-- 11. DECODE INDEFINITE-LENGTH ARRAY OF 100 INTS
+-- ============================================================================
+
+
+array100IndefData : Bytes
+array100IndefData =
+    CE.encode (CE.list Indefinite CE.int intRange100)
+
+
+dec_ec_array100_indef : () -> Maybe (List Int)
+dec_ec_array100_indef () =
+    CD.decode (CD.array CD.int) array100IndefData |> Result.toMaybe
+
+
+dec_tl_array100_indef : () -> Maybe (List Int)
+dec_tl_array100_indef () =
+    TD.decode (TD.list TD.int) array100IndefData
+
+
+
+-- ============================================================================
+-- 12. DECODE INDEFINITE-LENGTH MAP OF 100 INT PAIRS
+-- ============================================================================
+
+
+map100IndefData : Bytes
+map100IndefData =
+    CE.encode (CE.associativeList CE.Unsorted Indefinite CE.int CE.int intPairs100)
+
+
+dec_ec_map100_indef : () -> Maybe (List ( Int, Int ))
+dec_ec_map100_indef () =
+    CD.decode (CD.associativeList CD.int CD.int) map100IndefData |> Result.toMaybe
+
+
+dec_tl_map100_indef : () -> Maybe (List ( Int, Int ))
+dec_tl_map100_indef () =
+    TD.decode (TD.associativeList TD.int TD.int) map100IndefData
