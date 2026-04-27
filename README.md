@@ -126,6 +126,13 @@ Use `errorToString` to render errors as human-readable messages:
 CD.errorToString contextToString err
 ```
 
+## Performance
+
+This library is carefully optimized for the Elm runtime. Compared to
+`elm-toulouse/cbor`, encoders are 30% to 2x faster, and decoders on the
+happy path (no failure, no `oneOf` branching) are 3x to 5x faster.
+Detailed benchmarks are present in the `bench/` folder.
+
 ## Generic CBOR and diagnostics
 
 The `Cbor` module exposes `CborItem`, a lossless representation of any
