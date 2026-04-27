@@ -138,7 +138,7 @@ useful for debugging and logging:
 
 ```elm
 Cbor.diagnose (CborArray Definite [ CborInt52 IW0 1, CborString "two" ])
--- "1, \"two\"]"
+-- "[1, \"two\"]"
 ```
 
 ## License
