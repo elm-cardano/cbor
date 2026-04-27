@@ -1,7 +1,7 @@
 # elm-cardano/cbor
 
-CBOR ([RFC 8949](https://datatracker.ietf.org/doc/html/rfc8949)) encoder and
-decoder for Elm, with lossless round-tripping.
+Fast CBOR ([RFC 8949](https://datatracker.ietf.org/doc/html/rfc8949)) encoder and
+decoder for Elm, with lossless round-tripping, and rich error tracking.
 
 ## Install
 
