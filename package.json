@@ -1,0 +1,24 @@
+{
+  "private": true,
+  "devDependencies": {
+    "elm": "0.19.1-6",
+    "elm-test": "0.19.1-revision17",
+    "elm-review": "2.13.5",
+    "elm-format": "0.8.8"
+  },
+  "scripts": {
+    "test": "elm-test",
+    "review": "elm-review",
+    "format": "elm-format --yes src/ tests/ bench/",
+    "format:check": "elm-format --validate src/ tests/ bench/"
+  },
+  "engines": {
+    "pnpm": ">=10"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "elm",
+      "elm-format"
+    ]
+  }
+}
